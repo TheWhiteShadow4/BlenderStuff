@@ -24,12 +24,29 @@ class UNITY_PT_main_panel(bpy.types.Panel):
         box = layout.box()
         row = box.row()
         row.operator("unity.apply_rotation_fix", text="Fix Rotation for Unity")
+        row = box.row()
+        row.operator("unity.quick_export", text="Quick Export")
 
         # Section for Settings
         box = layout.box()
         box.label(text="Settings")
         row = box.row()
-        #row.prop(unity_props, "unity_project_path", text="")
+        row.prop(unity_props, "unity_project_path", text="")
+
+        if unity_props.unity_version:
+            row = box.row()
+            row.label(text=f"Version: {unity_props.unity_version}", icon='INFO')
+
+        if unity_props.unity_project_path and not unity_props.is_path_valid:
+            row = box.row()
+            row.alert = True
+            row.label(text="Invalid Unity Project Path", icon='ERROR')
+
+        row = box.row()
+        row.prop(unity_props, "export_path", text="Export Path")
+
+        row = box.row()
+        row.prop(unity_props, "unity_executable_path", text="Unity Executable")
 
 
 def register():

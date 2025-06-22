@@ -1,0 +1,39 @@
+using UnityEditor;
+using System.IO;
+
+class BlenderAssetPostprocessor : AssetPostprocessor
+{
+    void OnPreprocessModel()
+    {
+        // The marker file we expect from our Blender addon
+        string markerFilePath = assetPath + ".b2u";
+
+        if (File.Exists(markerFilePath))
+        {
+            ModelImporter modelImporter = (ModelImporter)assetImporter;
+            modelImporter.useFileScale = false;
+        }
+    }
+
+    // OnPostprocessModel runs after the model has been imported.
+    void OnPostprocessModel(UnityEngine.GameObject gameObject)
+    {
+        // The marker file we expect from our Blender addon
+        string markerFilePath = assetPath + ".b2u";
+
+        if (File.Exists(markerFilePath))
+        {
+            try
+            {
+                // Clean up the marker file and its meta file
+                File.Delete(markerFilePath);
+                File.Delete(markerFilePath + ".meta");
+            }
+            catch (System.Exception)
+            {
+                // If it fails, it's not critical. Log a warning.
+                UnityEngine.Debug.LogWarning($"BlenderAssetPostprocessor: Could not delete marker file '{markerFilePath}'.");
+            }
+        }
+    }
+} 
