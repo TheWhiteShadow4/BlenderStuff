@@ -1,5 +1,6 @@
 # TODO
 
+- [x] C#-Skript im Unity-Projekt bei jeder Ausführung aktualisieren, um bei Add-on-Updates konsistent zu sein.
 - [ ] Pfad vom BlenderAssetProcessor konfigurierbar machen 
 
 # Nice To Have
