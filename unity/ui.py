@@ -29,9 +29,9 @@ class UNITY_PT_main_panel(bpy.types.Panel):
 
         # Section for Settings
         box = layout.box()
-        box.label(text="Settings")
+        box.label(text="Unity Settings")
         row = box.row()
-        row.prop(unity_props, "unity_project_path", text="")
+        row.prop(unity_props, "unity_project_path", text="Project")
 
         if unity_props.unity_version:
             row = box.row()
@@ -46,7 +46,10 @@ class UNITY_PT_main_panel(bpy.types.Panel):
         row.prop(unity_props, "export_path", text="Export Path")
 
         row = box.row()
-        row.prop(unity_props, "unity_executable_path", text="Unity Executable")
+        row.prop(unity_props, "apply_gamma_correction")
+
+        #row = box.row()
+        #row.prop(unity_props, "unity_executable_path", text="Unity Executable")
 
 
 def register():

@@ -111,19 +111,30 @@ public class BlenderAssetPostprocessor : AssetPostprocessor
             // Apply properties
             foreach (var prop in materialData.properties)
             {
-                if (material.HasProperty(prop.name))
+                string propertyName = prop.name;
+                // If the property doesn't exist, try adding a leading underscore, which is a common Unity convention.
+                if (!material.HasProperty(propertyName))
                 {
-                    if (prop.type == "Color") { material.SetColor(prop.name, new Color(prop.value[0], prop.value[1], prop.value[2], prop.value[3])); }
-                    else if (prop.type == "Float") { material.SetFloat(prop.name, prop.floatValue); }
-                    else if (prop.type == "Texture" && !string.IsNullOrEmpty(prop.path))
+                    string underscoredName = "_" + propertyName;
+                    if (material.HasProperty(underscoredName))
                     {
-                        Texture2D tex = AssetDatabase.LoadAssetAtPath<Texture2D>(prop.path);
-                        if (tex != null) { material.SetTexture(prop.name, tex); }
-                        else { Debug.LogWarning($"Blender Importer: Could not load texture '{prop.path}'.", material); }
+                        propertyName = underscoredName;
+                    }
+                    else
+                    {
+                        Debug.LogError($"Blender Importer: Property '{prop.name}' (or '{underscoredName}') not found on shader '{material.shader.name}'.", material);
+                        continue; // Skip this property
                     }
                 }
-                else {
-                    Debug.LogError($"Blender Importer: Property '{prop.name}' not found on shader '{material.shader.name}'.", material);
+
+                // Set the property value using the potentially modified name.
+                if (prop.type == "Color") { material.SetColor(propertyName, new Color(prop.value[0], prop.value[1], prop.value[2], prop.value[3])); }
+                else if (prop.type == "Float") { material.SetFloat(propertyName, prop.floatValue); }
+                else if (prop.type == "Texture" && !string.IsNullOrEmpty(prop.path))
+                {
+                    Texture2D tex = AssetDatabase.LoadAssetAtPath<Texture2D>(prop.path);
+                    if (tex != null) { material.SetTexture(propertyName, tex); }
+                    else { Debug.LogWarning($"Blender Importer: Could not load texture '{prop.path}'.", material); }
                 }
             }
             

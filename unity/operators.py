@@ -88,36 +88,89 @@ class UNITY_OT_quick_export(bpy.types.Operator):
                 # Iterate through all inputs of the group node
                 for input_socket in interface_node.inputs:
                     prop_name = input_socket.name
+                    
+                    # Convention: Inputs ending with '_Alpha' are helpers and should be ignored.
+                    if prop_name.endswith("_Alpha"):
+                        continue
+
                     prop_entry = { "name": prop_name }
 
-                    # Check if the socket is linked to an Image Texture node
-                    if input_socket.is_linked and input_socket.links[0].from_node.type == 'TEX_IMAGE':
-                        tex_node = input_socket.links[0].from_node
-                        if tex_node.image:
-                            prop_entry["type"] = "Texture"
-                            
-                            # Copy the texture to a subfolder in the export directory
-                            # to ensure Unity can find it and to keep the project portable.
-                            source_path = tex_node.image.filepath_from_user()
-                            if os.path.exists(source_path):
-                                texture_export_dir = os.path.join(export_path, "Textures")
-                                os.makedirs(texture_export_dir, exist_ok=True)
-                                
-                                dest_path = os.path.join(texture_export_dir, os.path.basename(source_path))
-                                shutil.copy(source_path, dest_path)
-                                
-                                # We need the path relative to the Assets folder for Unity
-                                relative_texture_path = os.path.join(unity_props.export_path, "Textures", os.path.basename(source_path))
-                                prop_entry["path"] = relative_texture_path.replace('\\', '/')
-                            else:
-                                self.report({'WARNING'}, f"Texture file not found for '{prop_name}': {source_path}")
+                    is_texture_convention = prop_name.lower().endswith("map") or prop_name.lower().endswith("tex")
+                    is_color_convention = prop_name.lower().endswith("color")
 
-                    # If not linked to a texture, use the default value
+                    # Determine property type and value based on what the socket is actually connected to
+                    if input_socket.is_linked:
+                        from_node = input_socket.links[0].from_node
+
+                        # --- Case 1: Connected to an Image Texture node ---
+                        if from_node.type == 'TEX_IMAGE':
+                            if is_color_convention:
+                                self.report({'ERROR'}, f"Input '{prop_name}' follows color convention but is connected to a texture.")
+                                continue
+                            
+                            tex_node = from_node
+                            if tex_node.image:
+                                prop_entry["type"] = "Texture"
+                                source_path = tex_node.image.filepath_from_user()
+                                if os.path.exists(source_path):
+                                    texture_export_dir = os.path.join(export_path, "Textures")
+                                    os.makedirs(texture_export_dir, exist_ok=True)
+                                    dest_path = os.path.join(texture_export_dir, os.path.basename(source_path))
+                                    shutil.copy(source_path, dest_path)
+                                    relative_texture_path = os.path.join(unity_props.export_path, "Textures", os.path.basename(source_path))
+                                    prop_entry["path"] = relative_texture_path.replace('\\', '/')
+                                else:
+                                    self.report({'WARNING'}, f"Texture file not found for '{prop_name}': {source_path}")
+                            else:
+                                self.report({'WARNING'}, f"Texture node for input '{prop_name}' has no image assigned.")
+                                continue
+                        
+                        # --- Case 2: Connected to an RGB node ---
+                        elif from_node.type == 'RGB':
+                            if is_texture_convention:
+                                self.report({'ERROR'}, f"Input '{prop_name}' follows texture convention but is connected to an RGB Color node.")
+                                continue
+
+                            prop_entry["type"] = "Color"
+                            color_value = list(from_node.outputs['Color'].default_value)
+                            if unity_props.apply_gamma_correction:
+                                linear_color = from_node.outputs['Color'].default_value
+                                color_value = [
+                                    pow(linear_color[0], 1.0/2.2),
+                                    pow(linear_color[1], 1.0/2.2),
+                                    pow(linear_color[2], 1.0/2.2),
+                                    linear_color[3]
+                                ]
+                            prop_entry["value"] = color_value
+
+                        # --- Case 3: Connected to something else we don't support ---
+                        else:
+                            self.report({'INFO'}, f"Input '{prop_name}' is connected to an unsupported node type ('{from_node.type}'). It will be ignored.")
+                            continue
+                    
+                    # --- Case 4: The input is not connected, use its default value ---
                     else:
+                        if is_texture_convention:
+                            self.report({'ERROR'}, f"Input '{prop_name}' follows texture convention but is not connected to an Image Texture node.")
+                            continue
+
                         if input_socket.type == 'RGBA':
                             prop_entry["type"] = "Color"
-                            prop_entry["value"] = list(input_socket.default_value)
+                            color_value = list(input_socket.default_value)
+                            if unity_props.apply_gamma_correction:
+                                linear_color = input_socket.default_value
+                                color_value = [
+                                    pow(linear_color[0], 1.0/2.2),
+                                    pow(linear_color[1], 1.0/2.2),
+                                    pow(linear_color[2], 1.0/2.2),
+                                    linear_color[3]
+                                ]
+                            prop_entry["value"] = color_value
+
                         elif input_socket.type == 'VALUE':
+                            if is_color_convention:
+                                self.report({'ERROR'}, f"Input '{prop_name}' follows color convention but is a Float input, not an RGBA (Color) input.")
+                                continue
                             prop_entry["type"] = "Float"
                             prop_entry["floatValue"] = input_socket.default_value
                     

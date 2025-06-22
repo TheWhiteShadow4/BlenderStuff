@@ -69,6 +69,12 @@ class UnityAddonProperties(bpy.types.PropertyGroup):
         default=""
     )
 
+    apply_gamma_correction: bpy.props.BoolProperty(
+        name="Apply Gamma Correction",
+        description="Convert colors from Linear to sRGB space on export to match Blender's viewport color.",
+        default=True
+    )
+
 def register():
     bpy.utils.register_class(UnityAddonProperties)
     bpy.types.Scene.unity_tool_properties = bpy.props.PointerProperty(type=UnityAddonProperties)
