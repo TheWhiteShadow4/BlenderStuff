@@ -162,7 +162,7 @@ class UNITY_OT_quick_export(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
-        return context.active_object is not None
+        return context.active_object is not None and context.active_object.type == 'MESH'
 
     def execute(self, context):
         scene = context.scene

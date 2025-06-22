@@ -24,6 +24,9 @@ class UNITY_PT_main_panel(bpy.types.Panel):
         box = layout.box()
         row = box.row()
         row.operator("unity.apply_rotation_fix", text="Fix Rotation for Unity")
+        box = layout.box()
+        row = box.row()
+        row.prop(unity_props, "apply_gamma_correction")
         row = box.row()
         row.operator("unity.quick_export", text="Quick Export")
 
@@ -44,9 +47,6 @@ class UNITY_PT_main_panel(bpy.types.Panel):
 
         row = box.row()
         row.prop(unity_props, "export_path", text="Export Path")
-
-        row = box.row()
-        row.prop(unity_props, "apply_gamma_correction")
 
         #row = box.row()
         #row.prop(unity_props, "unity_executable_path", text="Unity Executable")
