@@ -11,6 +11,155 @@ class UNITY_OT_quick_export(bpy.types.Operator):
     bl_label = "Quick Export"
     bl_options = {'REGISTER', 'UNDO'}
 
+    def _correct_color(self, color, apply_gamma):
+        """Applies gamma correction to a color if the flag is set."""
+        if not apply_gamma:
+            return list(color)
+        # Convert Linear to sRGB color space for Unity.
+        return [
+            pow(color[0], 1.0/2.2),
+            pow(color[1], 1.0/2.2),
+            pow(color[2], 1.0/2.2),
+            color[3] # Alpha is linear
+        ]
+
+    def _copy_texture_and_get_path(self, tex_node, unity_props, export_path):
+        """Copies a texture to the export directory and returns its relative path for Unity."""
+        if not tex_node.image:
+            self.report({'WARNING'}, f"Texture node '{tex_node.name}' has no image assigned.")
+            return None
+            
+        source_path = tex_node.image.filepath_from_user()
+        if not os.path.exists(source_path):
+            self.report({'WARNING'}, f"Texture file not found: {source_path}")
+            return None
+
+        try:
+            texture_export_dir = os.path.join(export_path, "Textures")
+            os.makedirs(texture_export_dir, exist_ok=True)
+            
+            dest_path = os.path.join(texture_export_dir, os.path.basename(source_path))
+            shutil.copy(source_path, dest_path)
+            
+            relative_texture_path = os.path.join(unity_props.export_path, "Textures", os.path.basename(source_path))
+            return relative_texture_path.replace('\\', '/')
+        except Exception as e:
+            self.report({'WARNING'}, f"Could not copy texture '{source_path}': {e}")
+            return None
+
+    def _process_socket(self, socket, unity_props, export_path):
+        """Processes a single node socket and returns a dictionary for the JSON property, or None."""
+        prop_name = socket.name
+        
+        if prop_name.endswith("_Alpha"):
+            return None
+
+        is_texture_convention = prop_name.lower().endswith("map") or prop_name.lower().endswith("tex")
+        is_color_convention = prop_name.lower().endswith("color")
+        
+        prop_entry = {"name": prop_name}
+
+        # Case 1: Socket is connected to another node
+        if socket.is_linked:
+            from_node = socket.links[0].from_node
+
+            if from_node.type == 'TEX_IMAGE':
+                if is_color_convention:
+                    self.report({'ERROR'}, f"Input '{prop_name}' follows color convention but is connected to a texture.")
+                    return None
+                
+                tex_path = self._copy_texture_and_get_path(from_node, unity_props, export_path)
+                if tex_path:
+                    prop_entry["type"] = "Texture"
+                    prop_entry["path"] = tex_path
+                else:
+                    return None # Error was already reported by the helper
+
+            elif from_node.type == 'RGB':
+                if is_texture_convention:
+                    self.report({'ERROR'}, f"Input '{prop_name}' follows texture convention but is connected to an RGB Color node.")
+                    return None
+                
+                prop_entry["type"] = "Color"
+                color = from_node.outputs['Color'].default_value
+                prop_entry["value"] = self._correct_color(color, unity_props.apply_gamma_correction)
+
+            elif from_node.type == 'VALUE':
+                if is_texture_convention:
+                    self.report({'ERROR'}, f"Input '{prop_name}' follows texture convention but is connected to a Value node.")
+                    return None
+                if is_color_convention:
+                    self.report({'ERROR'}, f"Input '{prop_name}' follows color convention but is connected to a Value node.")
+                    return None
+
+                prop_entry["type"] = "Float"
+                prop_entry["floatValue"] = from_node.outputs['Value'].default_value
+
+            else:
+                self.report({'INFO'}, f"Input '{prop_name}' is connected to an unsupported node type ('{from_node.type}'). It will be ignored.")
+                return None
+        
+        # Case 2: Socket is not connected, use its default value
+        else:
+            if is_texture_convention:
+                self.report({'ERROR'}, f"Input '{prop_name}' follows texture convention but is not connected to an Image Texture node.")
+                return None
+
+            if socket.type == 'RGBA':
+                prop_entry["type"] = "Color"
+                color = socket.default_value
+                prop_entry["value"] = self._correct_color(color, unity_props.apply_gamma_correction)
+
+            elif socket.type == 'VALUE':
+                if is_color_convention:
+                    self.report({'ERROR'}, f"Input '{prop_name}' follows color convention but is a Float, not RGBA.")
+                    return None
+                prop_entry["type"] = "Float"
+                prop_entry["floatValue"] = socket.default_value
+            
+            else: # Other unlinked socket types we don't handle
+                return None
+
+        return prop_entry
+
+    def _handle_material_export(self, context, obj, export_path, fbx_filepath):
+        """Finds the active material, processes its properties, and writes the .b2u.json file."""
+        if not obj.active_material:
+            return
+
+        mat = obj.active_material
+        unity_props = context.scene.unity_tool_properties
+        
+        output_node = next((n for n in mat.node_tree.nodes if n.type == 'OUTPUT_MATERIAL'), None)
+        if not (output_node and output_node.inputs['Surface'].links):
+            return
+            
+        interface_node = output_node.inputs['Surface'].links[0].from_node
+        if interface_node.type != 'GROUP':
+            return
+
+        material_data = {
+            "materialName": mat.name,
+            "shaderName": interface_node.node_tree.name,
+            "properties": []
+        }
+
+        for socket in interface_node.inputs:
+            prop_entry = self._process_socket(socket, unity_props, export_path)
+            if prop_entry:
+                material_data["properties"].append(prop_entry)
+
+        if not material_data["properties"]:
+            return
+
+        json_filepath = fbx_filepath + ".b2u.json"
+        try:
+            with open(json_filepath, 'w') as f:
+                json.dump(material_data, f, indent=4)
+            self.report({'INFO'}, f"Exported material data for shader '{material_data['shaderName']}'")
+        except Exception as e:
+            self.report({'WARNING'}, f"Could not write material json: {e}")
+
     @classmethod
     def poll(cls, context):
         return context.active_object is not None
@@ -24,34 +173,27 @@ class UNITY_OT_quick_export(bpy.types.Operator):
             return {'CANCELLED'}
 
         # --- C# Script Handling ---
-        # We always write the script to ensure it's up to date with the addon version.
         try:
             editor_script_dir = os.path.join(unity_props.unity_project_path, "Assets", "Editor")
             os.makedirs(editor_script_dir, exist_ok=True)
             editor_script_path = os.path.join(editor_script_dir, "BlenderAssetPostprocessor.cs")
-            
-            # Get the path of the current script and find the template
             addon_dir = os.path.dirname(os.path.realpath(__file__))
             template_path = os.path.join(addon_dir, "BlenderAssetPostprocessor.cs")
-
             with open(template_path, 'r') as template_file:
                 content = template_file.read()
-            
             with open(editor_script_path, "w") as f:
                 f.write(content)
-
         except Exception as e:
             self.report({'ERROR'}, f"Could not create or update editor script: {e}")
             return {'CANCELLED'}
 
+        # --- FBX Export ---
         export_path = os.path.join(unity_props.unity_project_path, unity_props.export_path)
-
-        if not os.path.isdir(export_path):
-            try:
-                os.makedirs(export_path)
-            except OSError as e:
-                self.report({'ERROR'}, f"Could not create export directory: {e}")
-                return {'CANCELLED'}
+        try:
+            os.makedirs(export_path, exist_ok=True)
+        except OSError as e:
+            self.report({'ERROR'}, f"Could not create export directory: {e}")
+            return {'CANCELLED'}
 
         active_obj = context.active_object
         filepath = os.path.join(export_path, f"{active_obj.name}.fbx")
@@ -64,128 +206,8 @@ class UNITY_OT_quick_export(bpy.types.Operator):
             axis_up='Y',
         )
 
-        # --- Material Export Logic ---
-        if active_obj.active_material:
-            mat = active_obj.active_material
-            
-            # Find the final node connected to the Material Output to act as our interface
-            output_node = next((n for n in mat.node_tree.nodes if n.type == 'OUTPUT_MATERIAL'), None)
-            interface_node = None
-            if output_node and output_node.inputs['Surface'].links:
-                final_node = output_node.inputs['Surface'].links[0].from_node
-                if final_node.type == 'GROUP':
-                    interface_node = final_node
-
-            if interface_node:
-                # Use the group's internal node_tree name as the shader name
-                shader_name = interface_node.node_tree.name
-                material_data = {
-                    "materialName": mat.name,
-                    "shaderName": shader_name,
-                    "properties": []
-                }
-                
-                # Iterate through all inputs of the group node
-                for input_socket in interface_node.inputs:
-                    prop_name = input_socket.name
-                    
-                    # Convention: Inputs ending with '_Alpha' are helpers and should be ignored.
-                    if prop_name.endswith("_Alpha"):
-                        continue
-
-                    prop_entry = { "name": prop_name }
-
-                    is_texture_convention = prop_name.lower().endswith("map") or prop_name.lower().endswith("tex")
-                    is_color_convention = prop_name.lower().endswith("color")
-
-                    # Determine property type and value based on what the socket is actually connected to
-                    if input_socket.is_linked:
-                        from_node = input_socket.links[0].from_node
-
-                        # --- Case 1: Connected to an Image Texture node ---
-                        if from_node.type == 'TEX_IMAGE':
-                            if is_color_convention:
-                                self.report({'ERROR'}, f"Input '{prop_name}' follows color convention but is connected to a texture.")
-                                continue
-                            
-                            tex_node = from_node
-                            if tex_node.image:
-                                prop_entry["type"] = "Texture"
-                                source_path = tex_node.image.filepath_from_user()
-                                if os.path.exists(source_path):
-                                    texture_export_dir = os.path.join(export_path, "Textures")
-                                    os.makedirs(texture_export_dir, exist_ok=True)
-                                    dest_path = os.path.join(texture_export_dir, os.path.basename(source_path))
-                                    shutil.copy(source_path, dest_path)
-                                    relative_texture_path = os.path.join(unity_props.export_path, "Textures", os.path.basename(source_path))
-                                    prop_entry["path"] = relative_texture_path.replace('\\', '/')
-                                else:
-                                    self.report({'WARNING'}, f"Texture file not found for '{prop_name}': {source_path}")
-                            else:
-                                self.report({'WARNING'}, f"Texture node for input '{prop_name}' has no image assigned.")
-                                continue
-                        
-                        # --- Case 2: Connected to an RGB node ---
-                        elif from_node.type == 'RGB':
-                            if is_texture_convention:
-                                self.report({'ERROR'}, f"Input '{prop_name}' follows texture convention but is connected to an RGB Color node.")
-                                continue
-
-                            prop_entry["type"] = "Color"
-                            color_value = list(from_node.outputs['Color'].default_value)
-                            if unity_props.apply_gamma_correction:
-                                linear_color = from_node.outputs['Color'].default_value
-                                color_value = [
-                                    pow(linear_color[0], 1.0/2.2),
-                                    pow(linear_color[1], 1.0/2.2),
-                                    pow(linear_color[2], 1.0/2.2),
-                                    linear_color[3]
-                                ]
-                            prop_entry["value"] = color_value
-
-                        # --- Case 3: Connected to something else we don't support ---
-                        else:
-                            self.report({'INFO'}, f"Input '{prop_name}' is connected to an unsupported node type ('{from_node.type}'). It will be ignored.")
-                            continue
-                    
-                    # --- Case 4: The input is not connected, use its default value ---
-                    else:
-                        if is_texture_convention:
-                            self.report({'ERROR'}, f"Input '{prop_name}' follows texture convention but is not connected to an Image Texture node.")
-                            continue
-
-                        if input_socket.type == 'RGBA':
-                            prop_entry["type"] = "Color"
-                            color_value = list(input_socket.default_value)
-                            if unity_props.apply_gamma_correction:
-                                linear_color = input_socket.default_value
-                                color_value = [
-                                    pow(linear_color[0], 1.0/2.2),
-                                    pow(linear_color[1], 1.0/2.2),
-                                    pow(linear_color[2], 1.0/2.2),
-                                    linear_color[3]
-                                ]
-                            prop_entry["value"] = color_value
-
-                        elif input_socket.type == 'VALUE':
-                            if is_color_convention:
-                                self.report({'ERROR'}, f"Input '{prop_name}' follows color convention but is a Float input, not an RGBA (Color) input.")
-                                continue
-                            prop_entry["type"] = "Float"
-                            prop_entry["floatValue"] = input_socket.default_value
-                    
-                    # Only add the property if a type was successfully determined
-                    if "type" in prop_entry:
-                        material_data["properties"].append(prop_entry)
-
-                if material_data["properties"]:
-                    json_filepath = filepath + ".b2u.json"
-                    try:
-                        with open(json_filepath, 'w') as f:
-                            json.dump(material_data, f, indent=4)
-                        self.report({'INFO'}, f"Exported material data for shader '{shader_name}'")
-                    except Exception as e:
-                        self.report({'WARNING'}, f"Could not write material json: {e}")
+        # --- Material Export ---
+        self._handle_material_export(context, active_obj, export_path, filepath)
 
         self.report({'INFO'}, f"Exported {active_obj.name} to {filepath}")
         return {'FINISHED'}

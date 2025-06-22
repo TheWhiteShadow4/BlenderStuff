@@ -153,7 +153,6 @@ public class BlenderAssetPostprocessor : AssetPostprocessor
                 // If we found a matching material in the FBX, remap it.
                 if (sourceIdentifier.name != null)
                 {
-                    Debug.Log($"Blender Importer: Found source material '{sourceIdentifier.name}'. Remapping to '{material.name}'.");
                     modelImporter.AddRemap(sourceIdentifier, material);
                 }
                 else
