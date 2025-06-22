@@ -5,6 +5,10 @@ Wenn nicht anders erwähnt sind alle Skripte mit der Version 4.4 getestet und k�
 
 ## Inhalt
 
+### Unity Model Exporter
+Vereinfacht das Exportieren von Meshs nach Unity und automatisiert den Export von zugehörigen Materialien und Texturen.
+![Blender-Unity-Import](unity/blender-2-unity.jpg)
+
 ### Arch Ceil
 Erstellt ein Rund- oder Spitzbogengewölbe.
 
