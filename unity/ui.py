@@ -12,6 +12,11 @@ class UNITY_PT_main_panel(bpy.types.Panel):
 
     def draw(self, context):
         layout = self.layout
+
+        # Reload button
+        row = layout.row()
+        row.operator("script.reload", text="Reload Addon", icon='FILE_REFRESH')
+
         scene = context.scene
         unity_props = scene.unity_tool_properties
 
@@ -24,7 +29,7 @@ class UNITY_PT_main_panel(bpy.types.Panel):
         box = layout.box()
         box.label(text="Settings")
         row = box.row()
-        row.prop(unity_props, "unity_project_path", text="")
+        #row.prop(unity_props, "unity_project_path", text="")
 
 
 def register():

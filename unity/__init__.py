@@ -1,6 +1,6 @@
 # Copyright (c) 2025 TheWhiteShadow
 
-from . import ui, operators, properties
+from . import ui, operators
 
 bl_info = {
 	"name": "Unity Tools",
@@ -10,18 +10,18 @@ bl_info = {
 	"description": "Unity Helper Tools",
 	"warning": "",
 	"wiki_url": "",
-	"category": "3D View"
+	"category": "System"
 }
 
 def register():
 	ui.register()
 	operators.register()
-	properties.register()
+	#properties.register()
 
 def unregister():
 	ui.unregister()
 	operators.unregister()
-	properties.unregister()
+	#properties.unregister()
 
 if __name__ == "__main__":
 	register()
