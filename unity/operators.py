@@ -212,6 +212,238 @@ class UNITY_OT_quick_export(bpy.types.Operator):
         self.report({'INFO'}, f"Exported {active_obj.name} to {filepath}")
         return {'FINISHED'}
 
+def get_interface_node(context):
+    """Finds and returns the main interface node group if it's valid."""
+    if not (context.active_object and context.active_object.active_material):
+        return None
+    
+    mat = context.active_object.active_material
+    if not mat.use_nodes:
+        return None
+
+    output_node = next((n for n in mat.node_tree.nodes if n.type == 'OUTPUT_MATERIAL'), None)
+    if not (output_node and output_node.inputs['Surface'].links):
+        return None
+        
+    interface_node = output_node.inputs['Surface'].links[0].from_node
+    return interface_node if interface_node.type == 'GROUP' else None
+
+class UNITY_OT_bake_and_link(bpy.types.Operator):
+    """Bakes a procedural input to a texture and links it back to the node group"""
+    bl_idname = "unity.bake_and_link"
+    bl_label = "Bake Procedural Input"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def get_bake_targets(self, context):
+        """
+        Finds texture inputs on the node group that are connected to something
+        other than a standard Image Texture node (i.e., they are procedurally driven).
+        """
+        items = []
+        interface_node = get_interface_node(context)
+        if not interface_node:
+            return items
+        
+        for socket in interface_node.inputs:
+            is_texture_convention = socket.name.lower().endswith("map") or socket.name.lower().endswith("tex")
+            if is_texture_convention and socket.is_linked:
+                # Check if the source is NOT an image texture, making it a candidate for baking.
+                if socket.links[0].from_node.type != 'TEX_IMAGE':
+                    items.append((socket.name, socket.name, f"Bake procedural network connected to '{socket.name}'"))
+        return items
+
+    def _update_draw(self, context):
+        """
+        This dummy function's only purpose is to be the 'update' callback
+        for bake_mode. Its presence signals to Blender that the UI needs
+        to be redrawn when the property changes. This is the standard
+        and correct way to solve conditional UI visibility issues in dialogs.
+        """
+        pass
+
+    target_socket_name: bpy.props.EnumProperty(
+        items=get_bake_targets,
+        name="Target Input",
+        description="The texture input that is currently driven by a procedural network"
+    )
+    bake_mode: bpy.props.EnumProperty(
+        name="Mode",
+        items=[
+            ('NEW', "Create New Texture", "Bake to a new image file"),
+            ('EXISTING', "Use Existing Texture", "Bake to a pre-existing image datablock"),
+        ],
+        default='NEW',
+        description="Choose whether to create a new texture or overwrite an existing one"
+    )
+    resolution: bpy.props.IntProperty(
+        name="Resolution",
+        description="The width and height of the new texture",
+        default=2048,
+        min=256,
+        max=8192
+    )
+    existing_image_name: bpy.props.StringProperty(
+        name="Image",
+        description="Select an existing image to bake to"
+    )
+
+    @classmethod
+    def poll(cls, context):
+        # We need to make sure there's at least one valid target to bake.
+        # The 'self' is not available here, so we have to recreate the logic.
+        items = []
+        interface_node = get_interface_node(context)
+        if interface_node:
+            for socket in interface_node.inputs:
+                is_tex = socket.name.lower().endswith("map") or socket.name.lower().endswith("tex")
+                if is_tex and socket.is_linked and socket.links[0].from_node.type != 'TEX_IMAGE':
+                    items.append(socket.name)
+        return len(items) > 0
+
+    def draw(self, context):
+        layout = self.layout
+        layout.prop(self, "target_socket_name")
+        layout.separator()
+        
+        box = layout.box()
+        box.prop(self, "bake_mode")
+
+        if self.bake_mode == 'NEW':
+            box.prop(self, "resolution")
+        elif self.bake_mode == 'EXISTING':
+            # This creates a search field for the bpy.data.images collection.
+            box.prop_search(self, "existing_image_name", bpy.data, "images", text="Image")
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self, width=400)
+
+    def _perform_bake(self, context, material, socket_to_bake):
+        node_tree = material.node_tree
+        
+        # --- Part 1: Determine the bake image and resolution ---
+        if self.bake_mode == 'NEW':
+            bake_image_name = f"{material.name}_{socket_to_bake.name}_Baked"
+            bake_image = bpy.data.images.new(
+                name=bake_image_name,
+                width=self.resolution,
+                height=self.resolution
+            )
+        elif self.bake_mode == 'EXISTING':
+            if not self.existing_image_name:
+                self.report({'ERROR'}, "No existing image selected for baking.")
+                return None
+            # Retrieve the image datablock from the name provided by the StringProperty.
+            bake_image = bpy.data.images.get(self.existing_image_name)
+            if not bake_image:
+                self.report({'ERROR'}, f"Could not find an image named '{self.existing_image_name}'.")
+                return None
+        
+        # --- Part 2: Find or create the target texture node in the *active* material ---
+        active_material = context.active_object.active_material
+        bake_target_node = None
+        for node in active_material.node_tree.nodes:
+            if node.type == 'TEX_IMAGE' and node.image == bake_image:
+                bake_target_node = node
+                break
+        
+        if not bake_target_node:
+            bake_target_node = active_material.node_tree.nodes.new('ShaderNodeTexImage')
+            bake_target_node.image = bake_image
+            if socket_to_bake.node:
+                bake_target_node.location = socket_to_bake.node.location
+                bake_target_node.location.x -= 300
+
+        # --- Part 3: Prepare ALL materials of the object for baking ---
+        temp_nodes_to_cleanup = []
+        for mat_slot in context.active_object.material_slots:
+            if not mat_slot.material: continue
+            mat = mat_slot.material
+            
+            # For the active material, we use the node we already found/created.
+            if mat == active_material:
+                node_to_activate = bake_target_node
+            # For all other materials, create a temporary target node.
+            else:
+                other_bake_node = mat.node_tree.nodes.new('ShaderNodeTexImage')
+                other_bake_node.image = bake_image
+                temp_nodes_to_cleanup.append((mat, other_bake_node))
+                node_to_activate = other_bake_node
+            
+            # This is the crucial step: make the bake target the active node in each material.
+            for n in mat.node_tree.nodes: n.select = False
+            node_to_activate.select = True
+            mat.node_tree.nodes.active = node_to_activate
+
+        # --- Part 4: Temporarily rewire, Bake, and Restore ---
+        output_node = next(n for n in active_material.node_tree.nodes if n.type == 'OUTPUT_MATERIAL')
+        original_surface_link = output_node.inputs['Surface'].links[0]
+        active_material.node_tree.links.new(socket_to_bake, output_node.inputs['Surface'])
+        
+        original_engine = context.scene.render.engine
+        context.scene.render.engine = 'CYCLES'
+        self.report({'INFO'}, "Baking... this may take a moment.")
+        bpy.ops.object.bake(type='EMIT', save_mode='INTERNAL')
+        
+        context.scene.render.engine = original_engine
+        active_material.node_tree.links.remove(output_node.inputs['Surface'].links[0])
+        active_material.node_tree.links.new(original_surface_link.from_socket, output_node.inputs['Surface'])
+
+        # --- Part 5: Clean up temporary nodes ---
+        for mat, node in temp_nodes_to_cleanup:
+            mat.node_tree.nodes.remove(node)
+
+        # --- Part 6: Save the image ---
+        if not bake_image.filepath_raw:
+            blend_file_path = bpy.data.filepath
+            if not blend_file_path:
+                self.report({'ERROR'}, "Please save the .blend file first to define a path for new baked textures.")
+                node_tree.nodes.remove(bake_target_node)
+                bpy.data.images.remove(bake_image)
+                return None
+            
+            dir_path = os.path.dirname(blend_file_path)
+            save_dir = os.path.join(dir_path, "BakedTextures")
+            os.makedirs(save_dir, exist_ok=True)
+            image_filename = f"{bake_image.name}.png"
+            save_path = os.path.join(save_dir, image_filename)
+            bake_image.filepath_raw = save_path
+            bake_image.file_format = 'PNG'
+        
+        bake_image.save()
+        self.report({'INFO'}, f"Baked and saved texture to: {bake_image.filepath_raw}")
+        
+        return bake_target_node
+
+    def execute(self, context):
+        mat = context.active_object.active_material
+        interface_node = get_interface_node(context)
+        
+        target_input_socket = interface_node.inputs[self.target_socket_name]
+        
+        link_to_replace = target_input_socket.links[0]
+        socket_to_bake = link_to_replace.from_socket
+
+        baked_node = self._perform_bake(context, mat, socket_to_bake)
+        
+        if not baked_node:
+            return {'CANCELLED'}
+
+        mat.node_tree.links.remove(link_to_replace)
+        mat.node_tree.links.new(baked_node.outputs['Color'], target_input_socket)
+
+        self.report({'INFO'}, f"Successfully baked and relinked '{target_input_socket.name}'.")
+        
+        socket_name = target_input_socket.name
+        def draw_popup(self, context):
+            self.layout.label(text="Bake Successful!")
+            self.layout.separator()
+            self.layout.label(text=f"Input '{socket_name}' was baked to an image.")
+            self.layout.label(text="The new texture has been automatically linked.")
+
+        context.window_manager.popup_menu(draw_popup, title="Success", icon='CHECKMARK')
+        
+        return {'FINISHED'}
+
 class UNITY_OT_apply_rotation_fix(bpy.types.Operator):
     """Apply rotation fix for Unity export"""
     bl_idname = "unity.apply_rotation_fix"
@@ -258,10 +490,12 @@ class UNITY_OT_apply_rotation_fix(bpy.types.Operator):
 
 def register():
     bpy.utils.register_class(UNITY_OT_quick_export)
+    bpy.utils.register_class(UNITY_OT_bake_and_link)
     bpy.utils.register_class(UNITY_OT_apply_rotation_fix)
 
 def unregister():
     bpy.utils.unregister_class(UNITY_OT_apply_rotation_fix)
+    bpy.utils.unregister_class(UNITY_OT_bake_and_link)
     bpy.utils.unregister_class(UNITY_OT_quick_export)
 
 if __name__ == "__main__":

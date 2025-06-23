@@ -30,6 +30,12 @@ class UNITY_PT_main_panel(bpy.types.Panel):
         row = box.row()
         row.operator("unity.quick_export", text="Quick Export")
 
+        # Section for Advanced Operations
+        box = layout.box()
+        box.label(text="Advanced Operations")
+        row = box.row()
+        row.operator("unity.bake_and_link", text="Bake Procedural to Texture")
+
         # Section for Settings
         box = layout.box()
         box.label(text="Unity Settings")
