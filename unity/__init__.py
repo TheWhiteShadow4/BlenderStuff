@@ -1,7 +1,7 @@
 # Copyright (c) 2025 TheWhiteShadow
 
 import bpy
-from . import ui, operators, properties
+from . import ui, operators, properties, baker
 
 bl_info = {
 	"name": "Unity Tools",
@@ -19,7 +19,8 @@ if "bpy" in locals():
     importlib.reload(properties)
     importlib.reload(operators)
     importlib.reload(ui)
-    
+    importlib.reload(baker)
+
 
 def validate_and_refresh_ui():
     """

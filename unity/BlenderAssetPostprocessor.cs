@@ -4,7 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Collections.Generic;
 
-// Helper class for deserializing the JSON
+// Helper classes for deserializing the JSON
 [System.Serializable]
 public class MaterialProperty
 {
@@ -21,6 +21,12 @@ public class MaterialData
     public string materialName;
     public string shaderName;
     public MaterialProperty[] properties;
+}
+
+[System.Serializable]
+public class MaterialDataList
+{
+    public MaterialData[] materials;
 }
 
 public class BlenderAssetPostprocessor : AssetPostprocessor
@@ -75,93 +81,96 @@ public class BlenderAssetPostprocessor : AssetPostprocessor
             // Check if the corresponding FBX file exists.
             if (!File.Exists(fbxPath)) continue;
 
-            // Read material data first to get the material name
+            // Read material data list
             string jsonContent = File.ReadAllText(jsonPath);
-            MaterialData materialData = JsonUtility.FromJson<MaterialData>(jsonContent);
+            MaterialDataList materialList = JsonUtility.FromJson<MaterialDataList>(jsonContent);
 
-            // Define paths for the Materials subfolder and the material asset itself.
+            if (materialList == null || materialList.materials == null || materialList.materials.Length == 0)
+            {
+                continue;
+            }
+
             string fbxDirectory = Path.GetDirectoryName(fbxPath);
             string materialsDirectoryPath = Path.Combine(fbxDirectory, "Materials");
-            
+
             // Create the directory if it doesn't exist.
             if (!Directory.Exists(materialsDirectoryPath))
             {
                 Directory.CreateDirectory(materialsDirectoryPath);
             }
 
-            // Material path should be inside the 'Materials' folder, using the name from Blender.
-            string materialFileName = materialData.materialName + ".mat";
-            string materialPath = Path.Combine(materialsDirectoryPath, materialFileName).Replace('\\', '/');
-
-            Material material = AssetDatabase.LoadAssetAtPath<Material>(materialPath);
-            bool isNewMaterial = material == null;
-
-            if (isNewMaterial)
-            {
-				Debug.Log($"Blender Importer: Creating new material for {jsonPath}");
-                Shader shader = Shader.Find(materialData.shaderName);
-                if (shader == null) {
-                    Debug.LogError($"Blender Importer: Shader '{materialData.shaderName}' not found. Cannot create material for '{jsonPath}'.", AssetDatabase.LoadAssetAtPath<Object>(jsonPath));
-                    continue; // Skip to next json file
-                }
-                material = new Material(shader);
-                AssetDatabase.CreateAsset(material, materialPath);
-            }
-
-            // Apply properties
-            foreach (var prop in materialData.properties)
-            {
-                string propertyName = prop.name;
-                // If the property doesn't exist, try adding a leading underscore, which is a common Unity convention.
-                if (!material.HasProperty(propertyName))
-                {
-                    string underscoredName = "_" + propertyName;
-                    if (material.HasProperty(underscoredName))
-                    {
-                        propertyName = underscoredName;
-                    }
-                    else
-                    {
-                        Debug.LogError($"Blender Importer: Property '{prop.name}' (or '{underscoredName}') not found on shader '{material.shader.name}'.", material);
-                        continue; // Skip this property
-                    }
-                }
-
-                // Set the property value using the potentially modified name.
-                if (prop.type == "Color") { material.SetColor(propertyName, new Color(prop.value[0], prop.value[1], prop.value[2], prop.value[3])); }
-                else if (prop.type == "Float") { material.SetFloat(propertyName, prop.floatValue); }
-                else if (prop.type == "Texture" && !string.IsNullOrEmpty(prop.path))
-                {
-                    Texture2D tex = AssetDatabase.LoadAssetAtPath<Texture2D>(prop.path);
-                    if (tex != null) { material.SetTexture(propertyName, tex); }
-                    else { Debug.LogWarning($"Blender Importer: Could not load texture '{prop.path}'.", material); }
-                }
-            }
-            
-            EditorUtility.SetDirty(material);
-            assetsChanged = true;
-
-            // Now that the material is created/updated, find the FBX ModelImporter and assign it.
+            // Ensure the FBX importer is available for remapping later
             ModelImporter modelImporter = AssetImporter.GetAtPath(fbxPath) as ModelImporter;
-            if (modelImporter != null)
-            {
-                // Find the specific material identifier from the FBX that matches our material name
-                var sourceIdentifier = modelImporter.GetExternalObjectMap()
-                                                     .Keys
-                                                     .FirstOrDefault(id => id.type == typeof(Material) && id.name == materialData.materialName);
 
-                // If we found a matching material in the FBX, remap it.
-                if (sourceIdentifier.name != null)
+            foreach (var materialData in materialList.materials)
+            {
+                string materialFileName = materialData.materialName + ".mat";
+                string materialPath = Path.Combine(materialsDirectoryPath, materialFileName).Replace('\\', '/');
+
+                Material material = AssetDatabase.LoadAssetAtPath<Material>(materialPath);
+                bool isNewMaterial = material == null;
+
+                if (isNewMaterial)
                 {
-                    modelImporter.AddRemap(sourceIdentifier, material);
+					Debug.Log($"Blender Importer: Creating new material for {jsonPath}");
+                    Shader shader = Shader.Find(materialData.shaderName);
+                    if (shader == null) {
+                        Debug.LogError($"Blender Importer: Shader '{materialData.shaderName}' not found. Cannot create material for '{jsonPath}'.", AssetDatabase.LoadAssetAtPath<Object>(jsonPath));
+                        continue; // Skip to next json file
+                    }
+                    material = new Material(shader);
+                    AssetDatabase.CreateAsset(material, materialPath);
                 }
-                else
+                // Apply properties
+                foreach (MaterialProperty prop in materialData.properties)
                 {
-                    Debug.LogError($"Blender Importer: Could not find a material named '{materialData.materialName}' in the model '{fbxPath}'. Material will not be assigned automatically.", AssetDatabase.LoadAssetAtPath<Object>(fbxPath));
+                    string propertyName = prop.name;
+                    // If the property doesn't exist, try adding a leading underscore, which is a common Unity convention.
+                    if (!material.HasProperty(propertyName))
+                    {
+                        string underscoredName = "_" + propertyName;
+                        if (material.HasProperty(underscoredName))
+                        {
+                            propertyName = underscoredName;
+                        }
+                        else
+                        {
+                            Debug.LogError($"Blender Importer: Property '{prop.name}' (or '{underscoredName}') not found on shader '{material.shader.name}'.", material);
+                            continue; // Skip this property
+                        }
+                    }
+
+                    // Set the property value using the potentially modified name.
+                    if (prop.type == "Color") { material.SetColor(propertyName, new Color(prop.value[0], prop.value[1], prop.value[2], prop.value[3])); }
+                    else if (prop.type == "Float") { material.SetFloat(propertyName, prop.floatValue); }
+                    else if (prop.type == "Texture" && !string.IsNullOrEmpty(prop.path))
+                    {
+                        Texture2D tex = AssetDatabase.LoadAssetAtPath<Texture2D>(prop.path);
+                        if (tex != null) { material.SetTexture(propertyName, tex); }
+                        else { Debug.LogWarning($"Blender Importer: Could not load texture '{prop.path}'.", material); }
+                    }
                 }
                 
-                EditorUtility.SetDirty(modelImporter);
-                modelImporter.SaveAndReimport();
+                EditorUtility.SetDirty(material);
+                assetsChanged = true;
+
+                // Now that the material is created/updated, find the FBX ModelImporter and assign it.
+                if (modelImporter != null)
+                {
+                    // Find the specific material identifier from the FBX that matches our material name
+                    var sourceIdentifier = modelImporter.GetExternalObjectMap()
+                                                         .Keys
+                                                         .FirstOrDefault(id => id.type == typeof(Material) && id.name == materialData.materialName);
+
+                    // If we found a matching material in the FBX, remap it.
+                    if (sourceIdentifier.name != null)
+                    {
+                        modelImporter.AddRemap(sourceIdentifier, material);
+                    }
+                    
+                    EditorUtility.SetDirty(modelImporter);
+                    modelImporter.SaveAndReimport();
+                }
             }
 
             // Clean up the processed json file
