@@ -1,7 +1,8 @@
 # Copyright (c) 2025 TheWhiteShadow
 
+# pyright: reportMissingImports=false
 import bpy
-from . import ui, operators, properties, baker
+from . import ui, operators, properties, baker, bake_utils
 
 bl_info = {
 	"name": "Unity Tools",
@@ -20,7 +21,7 @@ if "bpy" in locals():
     importlib.reload(operators)
     importlib.reload(ui)
     importlib.reload(baker)
-
+    importlib.reload(bake_utils)
 
 def validate_and_refresh_ui():
     """
@@ -31,7 +32,7 @@ def validate_and_refresh_ui():
     if bpy.context and bpy.context.scene:
         props = bpy.context.scene.unity_tool_properties
         if props:
-            properties.update_unity_path(props, bpy.context)
+            properties.update_project_path(props, bpy.context)
             for area in bpy.context.screen.areas:
                 if area.type == 'VIEW_3D':
                     for region in area.regions:

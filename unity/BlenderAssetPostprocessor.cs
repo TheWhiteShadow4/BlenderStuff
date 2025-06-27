@@ -34,7 +34,7 @@ public class BlenderAssetPostprocessor : AssetPostprocessor
     // Step 1: Prepare the FBX importer BEFORE it imports the model.
     void OnPreprocessModel()
     {
-        string materialJsonPath = assetPath + ".b2u.json";
+        string materialJsonPath = assetPath + ".imp.json";
         if (File.Exists(materialJsonPath))
         {
             if (assetImporter is ModelImporter modelImporter)
@@ -62,7 +62,7 @@ public class BlenderAssetPostprocessor : AssetPostprocessor
         var jsonFilesToProcess = new List<string>();
         foreach (string path in importedAssets)
         {
-            if (path.EndsWith(".b2u.json"))
+            if (path.EndsWith(".imp.json"))
             {
                 jsonFilesToProcess.Add(path);
             }
@@ -74,9 +74,9 @@ public class BlenderAssetPostprocessor : AssetPostprocessor
 
         foreach(string jsonPath in jsonFilesToProcess)
         {
-            // The json file is named like 'path/to/model.fbx.b2u.json'.
+            // The json file is named like 'path/to/model.fbx.imp.json'.
             // We need to get 'path/to/model.fbx' from that.
-            string fbxPath = jsonPath.Substring(0, jsonPath.Length - ".b2u.json".Length);
+            string fbxPath = jsonPath.Substring(0, jsonPath.Length - ".imp.json".Length);
             
             // Check if the corresponding FBX file exists.
             if (!File.Exists(fbxPath)) continue;

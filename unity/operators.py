@@ -86,7 +86,7 @@ class UNITY_OT_quick_export(bpy.types.Operator):
 		if prop_name.endswith("_Alpha"):
 			return None
 
-		is_texture_convention = prop_name.lower().endswith("map") or prop_name.lower().endswith("tex")
+		is_texture_convention = input_backeable(socket)
 		is_color_convention = prop_name.lower().endswith("color")
 		
 		prop_entry = {"name": prop_name}
@@ -151,7 +151,7 @@ class UNITY_OT_quick_export(bpy.types.Operator):
 		return prop_entry
 
 	def _handle_material_export(self, context, obj, export_path, fbx_filepath):
-		"""Exports ALL materials of the given object into a single *.b2u.json file."""
+		"""Exports ALL materials of the given object into a single *.imp.json file."""
 		unity_props = context.scene.unity_tool_properties
 		materials_data = []
 
@@ -188,7 +188,7 @@ class UNITY_OT_quick_export(bpy.types.Operator):
 		if not materials_data:
 			return
 
-		json_filepath = fbx_filepath + ".b2u.json"
+		json_filepath = fbx_filepath + ".imp.json"
 		try:
 			with open(json_filepath, 'w') as f:
 				json.dump({"materials": materials_data}, f, indent=4)
@@ -204,27 +204,36 @@ class UNITY_OT_quick_export(bpy.types.Operator):
 		scene = context.scene
 		unity_props = scene.unity_tool_properties
 
-		if not unity_props.is_path_valid:
-			self.report({'ERROR'}, "Unity project path is not valid.")
+		project_path = unity_props.engine_project_path
+		from .properties import detect_game_engine
+		engine = detect_game_engine(project_path)
+
+		if engine is None:
+			self.report({'ERROR'}, "Projektpfad scheint weder ein Unity- noch ein Godot-Projekt zu sein.")
 			return {'CANCELLED'}
 
-		# --- C# Script Handling ---
+		# --- Import-Script Handling (Unity/Godot) -------------------
+		addon_dir = os.path.dirname(os.path.realpath(__file__))
 		try:
-			editor_script_dir = os.path.join(unity_props.unity_project_path, "Assets", "Editor")
-			os.makedirs(editor_script_dir, exist_ok=True)
-			editor_script_path = os.path.join(editor_script_dir, "BlenderAssetPostprocessor.cs")
-			addon_dir = os.path.dirname(os.path.realpath(__file__))
-			template_path = os.path.join(addon_dir, "BlenderAssetPostprocessor.cs")
-			with open(template_path, 'r') as template_file:
-				content = template_file.read()
-			with open(editor_script_path, "w") as f:
-				f.write(content)
+			if engine == 'UNITY':
+				editor_script_dir = os.path.join(project_path, "Assets", "Editor")
+				os.makedirs(editor_script_dir, exist_ok=True)
+				src = os.path.join(addon_dir, "BlenderAssetPostprocessor.cs")
+				dst = os.path.join(editor_script_dir, "BlenderAssetPostprocessor.cs")
+				shutil.copy(src, dst)
+			#elif engine == 'GODOT':
+			#	gd_addon_dir = os.path.join(project_path, "addons", "blender_importer")
+			#	os.makedirs(gd_addon_dir, exist_ok=True)
+			#	for fname in ("blender_import.gd", "fbx_import.gd", "plugin.cfg"):
+			#		src = os.path.join(addon_dir, "godot_plugin", fname)
+			#		dst = os.path.join(gd_addon_dir, fname)
+			#		shutil.copy(src, dst)
 		except Exception as e:
-			self.report({'ERROR'}, f"Could not create or update editor script: {e}")
+			self.report({'ERROR'}, f"Could not copy import script(s): {e}")
 			return {'CANCELLED'}
 
 		# --- FBX Export ---
-		export_path = os.path.join(unity_props.unity_project_path, unity_props.export_path)
+		export_path = os.path.join(unity_props.engine_project_path, unity_props.export_path)
 		try:
 			os.makedirs(export_path, exist_ok=True)
 		except OSError as e:
@@ -234,13 +243,22 @@ class UNITY_OT_quick_export(bpy.types.Operator):
 		active_obj = context.active_object
 		filepath = os.path.join(export_path, f"{active_obj.name}.fbx")
 
-		bpy.ops.export_scene.fbx(
-			filepath=filepath,
-			use_selection=True,
-			global_scale=0.01,
-			axis_forward='-Z',
-			axis_up='Y',
-		)
+		if engine == 'UNITY':
+			bpy.ops.export_scene.fbx(
+				filepath=filepath,
+				use_selection=True,
+				global_scale=0.01,
+				axis_forward='Z',
+				axis_up='Y',
+			)
+		elif engine == 'GODOT':
+			bpy.ops.export_scene.fbx(
+				filepath=filepath,
+				use_selection=True,
+				global_scale=1.0,
+				axis_forward='-Z',
+				axis_up='Y',
+			)
 
 		# --- Material Export ---
 		# Cache für bereits exportierte Texturen leeren
@@ -260,18 +278,21 @@ class UNITY_OT_bake_and_link(bpy.types.Operator):
 		"""
 		Finds texture inputs on the node group that are connected to something
 		other than a standard Image Texture node (i.e., they are procedurally driven).
+		Returns the items list formatted for an EnumProperty with ENUM_FLAG so that
+		multiple inputs can be chosen via Checkboxes.
 		"""
 		items = []
 		interface_node = baker.get_interface_node(context.active_object)
 		if not interface_node:
 			return items
 		
+		flag = 1
 		for socket in interface_node.inputs:
-			is_texture_convention = socket.name.lower().endswith("map") or socket.name.lower().endswith("tex")
+			is_texture_convention = input_backeable(socket)
 			if is_texture_convention and socket.is_linked:
-				# Check if the source is NOT an image texture, making it a candidate for baking.
-				if socket.links[0].from_node.type != 'TEX_IMAGE':
-					items.append((socket.name, socket.name, f"Bake procedural network connected to '{socket.name}'"))
+				# Each identifier gets an individual bit flag so they can be combined.
+				items.append((socket.name, socket.name, f"Bake procedural network connected to '{socket.name}'", flag))
+				flag <<= 1  # next power of two
 		return items
 
 	def _update_draw(self, context):
@@ -283,11 +304,27 @@ class UNITY_OT_bake_and_link(bpy.types.Operator):
 		"""
 		pass
 
-	target_socket_name: bpy.props.EnumProperty(
-		items=get_bake_targets,
-		name="Target Input",
-		description="The texture input that is currently driven by a procedural network"
+	@staticmethod
+	def _get_bake_target_names(context):
+		"""Helper to get a list of bakeable socket names."""
+		names = []
+		interface_node = baker.get_interface_node(context.active_object)
+		if not interface_node:
+			return names
+		
+		for socket in interface_node.inputs:
+			is_texture_convention = input_backeable(socket)
+			if is_texture_convention and socket.is_linked:
+				names.append(socket.name)
+		return names
+
+	# Using a BoolVectorProperty instead of Enum. Size is fixed, so we set a generous limit.
+	bake_targets_bools: bpy.props.BoolVectorProperty(
+		name="Target Inputs",
+		description="Die Textureingänge, die gebacken werden sollen",
+		size=32 
 	)
+	
 	bake_mode: bpy.props.EnumProperty(
 		name="Mode",
 		items=[
@@ -316,21 +353,24 @@ class UNITY_OT_bake_and_link(bpy.types.Operator):
 	@classmethod
 	def poll(cls, context):
 		# We need to make sure there's at least one valid target to bake.
-		# The 'self' is not available here, so we have to recreate the logic.
-		items = []
-		interface_node = baker.get_interface_node(context.active_object)
-		if interface_node:
-			for socket in interface_node.inputs:
-				is_tex = socket.name.lower().endswith("map") or socket.name.lower().endswith("tex")
-				if is_tex and socket.is_linked and socket.links[0].from_node.type != 'TEX_IMAGE':
-					items.append(socket.name)
-		return len(items) > 0
+		return len(cls._get_bake_target_names(context)) > 0
 
 	def draw(self, context):
 		layout = self.layout
-		layout.prop(self, "target_socket_name")
-		layout.separator()
 		
+		# Manually draw the bool vector as a list of checkboxes
+		bake_target_names = self.__class__._get_bake_target_names(context)
+		if bake_target_names:
+			box = layout.box()
+			box.label(text="Target Inputs")
+			for i, name in enumerate(bake_target_names):
+				# Ensure we don't exceed the BoolVector's fixed size
+				if i < len(self.bake_targets_bools):
+					box.prop(self, "bake_targets_bools", index=i, text=name)
+			layout.separator()
+		else:
+			layout.label(text="No bakeable inputs found.")
+
 		# UV Map selection (if more than one exists)
 		obj = context.active_object
 		uv_layers = obj.data.uv_layers if obj and obj.data and hasattr(obj.data, 'uv_layers') else []
@@ -371,8 +411,8 @@ class UNITY_OT_bake_and_link(bpy.types.Operator):
 			self.report({'ERROR'}, "No interface node found for the active object.")
 			return {'CANCELLED'}
 
-		socket_name = self.target_socket_name
-		bake_image_name = f"{context.active_object.name}_{socket_name}_Baked"
+		socket_names = self.target_socket_names
+		bake_image_name = f"{context.active_object.name}_{socket_names[0]}_Baked"
 		if self.bake_mode == 'NEW':
 			bake_image = bpy.data.images.new(
 				name=bake_image_name,
@@ -390,7 +430,7 @@ class UNITY_OT_bake_and_link(bpy.types.Operator):
 				return None
 
 		
-		baker_instance = baker.Baker(socket_name, bake_image, self.uv_map_name)
+		baker_instance = baker.Baker(socket_names[0], bake_image, self.uv_map_name)
 		success = baker_instance.bake_selection()
 
 		if success:
@@ -400,7 +440,7 @@ class UNITY_OT_bake_and_link(bpy.types.Operator):
 				else:
 					self.layout.label(text=f"Bake Successful.")
 				self.layout.separator()
-				self.layout.label(text=f"Input '{socket_name}' was baked to an image.")
+				self.layout.label(text=f"Input '{socket_names[0]}' was baked to an image.")
 				self.layout.label(text="The new texture has been automatically linked.")
 				if baker_instance.warnings:
 					self.layout.separator()
@@ -411,6 +451,33 @@ class UNITY_OT_bake_and_link(bpy.types.Operator):
 			context.window_manager.popup_menu(draw_popup, title="Success", icon='CHECKMARK')
 		
 		return {'FINISHED'}
+
+def input_backeable(socket):
+	return True #socket.name.lower().endswith("map") or socket.name.lower().endswith("tex")
+
+class UNITY_OT_bake_compile(bpy.types.Operator):
+	"""Bakes a texture to a new object"""
+	bl_idname = "unity.bake_compile"
+	bl_label = "Bake Texture to new Object"
+	bl_options = {'REGISTER', 'UNDO'}
+	
+	def execute(self, context):
+		# Objekte kopieren
+		# modifier apply
+		# ggf. Objekte in meshs konvertieren
+		# Objekte mergen
+		# alle Mterialien Baken
+		# ggf. Farbpaletten anlegen
+		# Materialien vereinen
+		# ungenuzte UV Layer löschen
+		# fertig
+		pass
+	
+	@classmethod
+	def poll(cls, context):
+		return context.active_object is not None and context.active_object.type == 'MESH'
+	
+	
 
 class UNITY_OT_apply_rotation_fix(bpy.types.Operator):
     """Apply rotation fix for Unity export"""
@@ -456,14 +523,18 @@ class UNITY_OT_apply_rotation_fix(bpy.types.Operator):
         self.report({'INFO'}, "Rotation fix applied")
         return {'FINISHED'}
 
+# ---------------------------------------------------------------
+
 def register():
     bpy.utils.register_class(UNITY_OT_quick_export)
     bpy.utils.register_class(UNITY_OT_bake_and_link)
     bpy.utils.register_class(UNITY_OT_apply_rotation_fix)
+    bpy.utils.register_class(UNITY_OT_bake_compile)
 
 def unregister():
     bpy.utils.unregister_class(UNITY_OT_apply_rotation_fix)
     bpy.utils.unregister_class(UNITY_OT_bake_and_link)
+    bpy.utils.unregister_class(UNITY_OT_bake_compile)
     bpy.utils.unregister_class(UNITY_OT_quick_export)
 
 if __name__ == "__main__":
