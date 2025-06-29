@@ -2,7 +2,8 @@
 
 # pyright: reportMissingImports=false
 import bpy
-from . import ui, operators, properties, baker, bake_utils
+from . import properties, operators, baker, bake_utils
+from .ui import panel_main, panel_baking
 
 bl_info = {
 	"name": "Unity Tools",
@@ -19,7 +20,8 @@ if "bpy" in locals():
     import importlib
     importlib.reload(properties)
     importlib.reload(operators)
-    importlib.reload(ui)
+    importlib.reload(panel_main)
+    importlib.reload(panel_baking)
     importlib.reload(baker)
     importlib.reload(bake_utils)
 
@@ -49,7 +51,8 @@ def on_load_handler(dummy):
 def register():
 	properties.register()
 	operators.register()
-	ui.register()
+	panel_main.register()
+	panel_baking.register()
 	
 	bpy.app.handlers.load_post.append(on_load_handler)
 	
@@ -60,7 +63,8 @@ def register():
 
 
 def unregister():
-	ui.unregister()
+	panel_baking.unregister()
+	panel_main.unregister()
 	operators.unregister()
 	properties.unregister()
 	
