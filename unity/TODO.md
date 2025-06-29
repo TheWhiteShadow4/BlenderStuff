@@ -1,5 +1,10 @@
 # TODO
 
+# Bugs
+- [ ] Bake presets Button wird nicht deaktiviert, wenn keine Presets aktiv sind
+- [x] Channel Auswahl in Single Channel Sockets ist mehrzeilig und leer.
+
+
 - [x] C#-Skript im Unity-Projekt bei jeder Ausführung aktualisieren, um bei Add-on-Updates konsistent zu sein.
 - [x] Color Space in erstellten Images berücksichtigen. sRGB und raw (non color data)
 - [x] Blender Bake Optionen wie bleeding, clear Image

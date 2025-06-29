@@ -283,7 +283,8 @@ def draw_bake_settings_ui(layout, context, override_settings, preset_settings):
     split = row.split(factor=0.4)
     if socket_type in {'VALUE', 'INT', 'BOOLEAN'}:
         split.label(text="Bake to Channel")
-        split.prop(settings_source, "single_channel_target", expand=True, text="")
+        sub_row = split.row(align=True)
+        sub_row.prop(settings_source, "single_channel_target", expand=True)
     elif socket_type in {'VECTOR', 'RGBA'}:
         split.label(text="Bake Channels")
         sub_row = split.row(align=True)
