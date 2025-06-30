@@ -8,10 +8,14 @@ class Baker():
 	def __init__(self, bake_data: bake_utils.BakeData):
 		self.bake_data = bake_data
 		self.dummy_image = None
+		self.difuse_pipeline = False
+		self.material_metadata = {}
+		# Index des Passes, der Debugged werden soll. Der Prozess wird nach diesem Pass beendet und die Nodes werden nicht aufgeräumt.
+		self.debug_pass_idx = -1
 	
 	def get_or_create_dummy_image(self):
 		if not self.dummy_image:
-			self.dummy_image = bpy.data.images.new(name="Dummy Image", width=1, height=1)
+			self.dummy_image = bpy.data.images.new(name="__DummyImage", width=1, height=1)
 			self.dummy_image.generated_type = 'BLANK'
 		return self.dummy_image
 
@@ -19,10 +23,8 @@ class Baker():
 		self.warnings = []
 		self.objects = []
 
-		# TODO: ungültige Objekte vorab aus der Bake Data nehmen.
 		for obj in bpy.context.selected_objects:
-			if obj.type == 'MESH':
-				self.objects.append(obj)
+			self.objects.append(obj)
 
 		# globalen State speichern
 		preserved_global_state = self._preserve_global_state()
@@ -33,6 +35,9 @@ class Baker():
 			bpy.context.scene.render.engine = 'CYCLES'
 			bpy.context.scene.render.bake.use_clear = False
 
+			if self.debug_pass_idx >= 0:
+				self.bake_data.passes = [self.bake_data.passes[self.debug_pass_idx]]
+			
 			for bake_pass in self.bake_data.passes:
 				print(f"Bake Pass {bake_pass.index}")
 				self.bake_pass(bake_pass)
@@ -51,30 +56,34 @@ class Baker():
 		return {'FINISHED'}	
 
 	def bake_pass(self, bake_pass: bake_utils.BakePass):
-		preserved_object_state = self._preserve_object_state(bake_pass.object, bake_pass)
-		next(preserved_object_state)
-
 		try:
 			print({'INFO'}, f"Prepare '{bake_pass.object.name}'.")
-			self._collect_materials_for_pass(bake_pass)
-			for bake_material in self.bake_materials:
-				bake_material.prepare()
+			self._collect_materials_for_pass(bake_pass, self.difuse_pipeline)
+			for material_metadata in self.material_metadata.values():
+				material_metadata.prepare()
+			for bake_socket in self.bake_sockets:
+				bake_socket.prepare(self.material_metadata[bake_socket.material])
 
-			# TODO: Funktionalität frei von der KI interpretiert.
-			# Hier ist weitere Arbeit erfordferlich wie weit sich das auswirkt, und das die Erwartunghaltung vom Benutzer wäre.
-			print(f"Baking with margin: {bake_pass.max_margin}")
-			bpy.ops.object.bake(type='EMIT', save_mode='INTERNAL', margin=bake_pass.max_margin)
+			# Blender Bake Operation ausführen.
+			if self.difuse_pipeline:
+				bpy.ops.object.bake(type='DIFFUSE', pass_filter={'COLOR'}, save_mode='INTERNAL', margin=bake_pass.max_margin)
+			else:
+				bpy.ops.object.bake(type='EMIT', save_mode='INTERNAL', margin=bake_pass.max_margin)
 			
-			for bake_material in self.bake_materials:
-				bake_material.cleanup()
+			# Cleanup
+			if self.debug_pass_idx < 0:
+				for bake_socket in self.bake_sockets:
+					bake_socket.cleanup_pass()
+				for material_metadata in self.material_metadata.values():
+					material_metadata.cleanup()
 
 		except Exception as e:
 			print("Führe Rollback aus.")
-			for bake_material in self.bake_materials:
-				bake_material.rollback()
+			for bake_socket in self.bake_sockets:
+				bake_socket.rollback()
+			for material_metadata in self.material_metadata.values():
+				material_metadata.cleanup()
 			raise e
-		finally:
-			next(preserved_object_state)
 
 
 	def _preserve_global_state(self):
@@ -93,85 +102,123 @@ class Baker():
 		# State wiederherstellen
 		bpy.context.scene.render.bake.use_clear = original_use_clear
 		bpy.context.scene.render.engine = original_engine
-		
+
 		for obj, prev in prev_hide_render.items():
 			obj.hide_render = prev
 
 		print({'INFO'}, f"State wiederhergestellt.")
 		yield
 
-	def _preserve_object_state(self, obj, bake_pass):
-		# TODO: Wenn die Funktion so leer bleibt, kann sie weg
-
-		# TODO: Neuer Ansatz: UV vor dem Image Node setzen
-		#prev_active_uv = {}
-		#if obj and obj.data and hasattr(obj.data, 'uv_layers') and self.uv_map_name:
-		#	active_uv_name = None
-		#	for uv in obj.data.uv_layers:
-		#		if uv.active:
-		#			active_uv_name = uv.name
-		#		# Setze während des Bakes ausschließlich die gewünschte UV-Map aktiv
-		#		uv.active = (uv.name == self.uv_map_name)
-		#	# Speichere (auch None möglich) für spätere Wiederherstellung
-		#	prev_active_uv[obj] = active_uv_name
-
-		#print({'INFO'}, f"Object State gespeichert.")
-		yield
-
-		#if obj and obj.data and hasattr(obj.data, 'uv_layers'):
-		#	original_name = prev_active_uv.get(obj)
-		#	# Falls kein ursprünglicher aktiver Layer gespeichert wurde, bleiben alle UV-Layer inaktiv.
-		#	for uv in obj.data.uv_layers:
-		#		uv.active = (uv.name == original_name)
-		
-
-		#print({'INFO'}, f"Object State wiederhergestellt.")
-		yield
-
-	def _collect_materials_for_pass(self, bake_pass):
+	def _collect_materials_for_pass(self, bake_pass, difuse_pipeline):
 		'''
 		Sammelt alle Materialien aus den ausgewählten Objekten. 
 		Jedes Material muss nur einaml verarbeitet werden.
 		'''
-		self.bake_materials = []
+		self.bake_sockets = []
 		for setting in bake_pass.settings:
 			mat = setting.material
+			if mat not in self.material_metadata:
+				self.material_metadata[mat] = MaterialMetadata(mat, difuse_pipeline)
 
-			image = setting.image
+			image: bpy.types.Image = setting.image
 			if setting.is_dummy():
 				image = self.get_or_create_dummy_image()
 			elif image == None:
-				image = bake_pass.get_or_create_image_for_setting(setting)
+				image = bake_pass.initialize_image(setting)
 
 			v_offset = (len(self.bake_data.passes) / 2 - bake_pass.index) * 250
 
-			image_node = self._get_or_create_image_node(mat, setting.input_socket, image, v_offset)
+			image_node = self.material_metadata[mat].get_image_proxy(setting.input_socket, image, v_offset)
 			bake_material = BakeMaterial(mat, setting.input_socket, setting.uv_map_name, image_node, setting.channels)
 
 			print({'INFO'}, f"Adding baking material {mat.name}.")
-			self.bake_materials.append(bake_material)
+			self.bake_sockets.append(bake_material)
 
-	def _get_or_create_image_node(self, material, if_node_input, bake_image, v_offset):
-		'''
-		Gibt den Image Node des Materials zurück, oder erstellt einen neuen, wenn er nicht existiert.
-		'''
-		bake_target_node = None
-		if bake_image:
-			for node in material.node_tree.nodes:
-				if node.type == 'TEX_IMAGE' and node.image == bake_image:
-					bake_target_node = node
-					break
+
+class MaterialMetadata():
+	def __init__(self, material, difuse_pipeline):
+		self.material = material
+		self.image_proxies = {}
+		self.combine_node = None
+		self.difuse_pipeline = difuse_pipeline
+		self.difuse_node = None
+		self.alpha_node = None
+		self.shader_mix_node = None
+
+		self.output_node = next(n for n in self.material.node_tree.nodes if n.type == 'OUTPUT_MATERIAL')
+		if self.output_node == None:
+			raise ValueError(f"Output node not found for material {self.material.name}.")
+		self.proxy_output_pin = self.output_node.inputs['Surface']
+		self.original_shader_output = [l.from_socket for l in self.proxy_output_pin.links]
+
+	def get_image_proxy(self, socket, image, v_offset):
+		image_proxy = self.image_proxies.get(image)
+		if not image_proxy:
+			image_node = None
+			was_created = False
+			if image not in self.image_proxies:
+				for node in self.material.node_tree.nodes:
+					if node.type == 'TEX_IMAGE' and node.image == image:
+						image_node = node
+						break
+
+			if not image_node:
+				image_node = self.material.node_tree.nodes.new('ShaderNodeTexImage')
+				image_node.image = image
+				was_created = True
+				if socket:
+					image_node.location = socket.node.location
+					image_node.location.x -= 300
+					image_node.location.y += v_offset
+			image_proxy = bake_utils.ImageNodeProxy(self.material, image_node, was_created)
+			self.image_proxies[image] = image_proxy
+		return image_proxy
+
+	def prepare(self):
+		self.proxy_output_pin = self.output_node.inputs['Surface']
+		if self.difuse_pipeline:
+			self.difuse_node = self.material.node_tree.nodes.new('ShaderNodeBsdfDiffuse')
+			self.alpha_node = self.material.node_tree.nodes.new('ShaderNodeBsdfTransparent')
+			self.shader_mix_node = self.material.node_tree.nodes.new('ShaderNodeMixShader')
+			self.shader_mix_node.inputs['Fac'].default_value = 1.0
+			self.material.node_tree.links.new(self.shader_mix_node.outputs['Shader'], self.proxy_output_pin)
+			self.material.node_tree.links.new(self.difuse_node.outputs['BSDF'], self.shader_mix_node.inputs[2])
+			self.material.node_tree.links.new(self.alpha_node.outputs['BSDF'], self.shader_mix_node.inputs[1])
+			self.proxy_output_pin = self.difuse_node.inputs['Color']
+
+	def connect_color(self, output_to_bake, _channels):
+		self.material.node_tree.links.new(output_to_bake, self.proxy_output_pin)
+
+	def connect_single(self, output_to_bake, ch):
+		if ch == 'A':
+			if self.shader_mix_node:
+				self.material.node_tree.links.new(output_to_bake, self.shader_mix_node.inputs['Fac'])
+			else:
+				raise ValueError(f"Alpha channel is only supported in diffuse pipeline.")
 		else:
-			bake_image = self.get_or_create_dummy_image()
+			if not self.combine_node:
+				self.combine_node = self.material.node_tree.nodes.new('ShaderNodeCombineRGB')
+				self.material.node_tree.links.new(self.combine_node.outputs['Image'], self.proxy_output_pin)
+			self.material.node_tree.links.new(output_to_bake, self.combine_node.inputs[ch])
+
+
+	def cleanup(self):
+		self.proxy_output_pin = self.output_node.inputs['Surface']
+		for fs in self.original_shader_output:
+			self.material.node_tree.links.new(fs, self.proxy_output_pin)
 		
-		if not bake_target_node and if_node_input:
-			bake_target_node = material.node_tree.nodes.new('ShaderNodeTexImage')
-			bake_target_node.image = bake_image
-			if if_node_input.node:
-				bake_target_node.location = if_node_input.node.location
-				bake_target_node.location.x -= 300
-				bake_target_node.location.y += v_offset
-		return bake_target_node
+		if self.combine_node:
+			self.material.node_tree.nodes.remove(self.combine_node)
+			self.combine_node = None
+		if self.difuse_node:
+			self.material.node_tree.nodes.remove(self.difuse_node)
+			self.difuse_node = None
+		if self.alpha_node:
+			self.material.node_tree.nodes.remove(self.alpha_node)
+			self.alpha_node = None
+		if self.shader_mix_node:
+			self.material.node_tree.nodes.remove(self.shader_mix_node)
+			self.shader_mix_node = None
 
 
 class BakeMaterial():
@@ -182,15 +229,15 @@ class BakeMaterial():
 		self.material = material
 		self.uv_map_name = uv_map_name
 		self.input_socket = input_socket
+		self.alpha_socket = None
 		self.socket_link = None
 		self.output_to_bake = None
+		self.alpha_to_bake = None
 		self.channels = channels
 
 		# Nodes
 		self.image_node = image_node
 		self.uv_node = None
-		self.output_node = next(n for n in self.material.node_tree.nodes if n.type == 'OUTPUT_MATERIAL')
-		self.original_shader_output = [l.from_socket for l in self.output_node.inputs['Surface'].links]
 		self.proxy_value_node = None
 
 
@@ -198,14 +245,17 @@ class BakeMaterial():
 		return self.output_to_bake is None
 
 
-	def prepare(self):
+	def prepare(self, metadata: MaterialMetadata):
+		if not self.image_node:
+			raise ValueError(f"Image node not found for material {self.material.name}.")
+
 		if self.input_socket:
 			if len(self.input_socket.links) > 0:
 				self.socket_link = self.input_socket.links[0]
 				self.output_to_bake = self.socket_link.from_socket
 			else:
 				print(f"Creating proxy value node for {self.input_socket.name}")
-				if self.input_socket.type in {'VALUE', 'INT', 'BOOLEAN'}:
+				if bake_utils.is_single_channel_socket(self.input_socket):
 					self.proxy_value_node = self.material.node_tree.nodes.new('ShaderNodeValue')
 					self.proxy_value_node.outputs[0].default_value = self.input_socket.default_value
 					self.output_to_bake = self.proxy_value_node.outputs['Value']
@@ -217,57 +267,40 @@ class BakeMaterial():
 				self.proxy_value_node.location = self.input_socket.node.location
 				self.proxy_value_node.location.x -= 200
 
-		self.create_uv_node()
 		if self.output_to_bake:
-			self.material.node_tree.links.new(self.output_to_bake, self.output_node.inputs['Surface'])
-		if self.image_node:
-			self.image_node.select = True
-			self.material.node_tree.nodes.active = self.image_node
+			if bake_utils.is_single_channel_socket(self.input_socket):
+				for ch in self.channels:
+					metadata.connect_single(self.output_to_bake, ch)
+			else:
+				metadata.connect_color(self.output_to_bake, self.input_socket)
+				if 'A' in self.channels:
+					self.alpha_to_bake = self.find_alpha_input()
+					if self.alpha_to_bake:
+						metadata.connect_single(self.alpha_to_bake, 'A')
 
 
-	def _restore_output_node(self):
-		for fs in self.original_shader_output:
-			self.material.node_tree.links.new(fs, self.output_node.inputs['Surface'])
+		if not self.is_dummy():
+			self.image_node.add_uv(self.uv_map_name)
+		self.image_node.select()
 
 
 	def cleanup(self):
-		'''
-		Entfernt alle temporären Nodes und Links.
-		'''
 		if self.is_dummy() and self.image_node:
-			self.material.node_tree.nodes.remove(self.image_node)
-			if self.uv_node:
-				self.material.node_tree.nodes.remove(self.uv_node)
+			self.image_node.remove()
 			return
 
-		self.material.node_tree.links.remove(self.output_node.inputs['Surface'].links[0])
 
-		if not self.is_dummy():
-			if self.input_socket.type in {'VALUE', 'INT', 'BOOLEAN'}:
-				separate_node = self.material.node_tree.nodes.new('ShaderNodeSeparateColor')
-				separate_node.location = self.image_node.location
-				separate_node.location.x += 150
-				
-				self.material.node_tree.links.new(self.image_node.outputs['Color'], separate_node.inputs['Color'])
-				
-				channel_map = {'R': 'Red', 'G': 'Green', 'B': 'Blue'}
-				if len(self.channels) != 1:
-					raise ValueError(f"Expected exactly one channel for single-channel bake for material '{self.material.name}', but got {self.channels}.")
-
-				channel_key = next(iter(self.channels))
-				output_name = channel_map.get(channel_key)
-
-				if output_name is None:
-					raise ValueError(f"Invalid channel '{channel_key}' specified for material '{self.material.name}'. Must be one of {list(channel_map.keys())}.")
-
-				self.material.node_tree.links.new(separate_node.outputs[output_name], self.input_socket)
-			else:
-				self.material.node_tree.links.new(self.image_node.outputs['Color'], self.input_socket)
+	def cleanup_pass(self):
+		if self.is_dummy():
+			self.image_node.remove()
+			return
+		
+		self.image_node.connect_to(self.input_socket, self.channels)
+		if self.alpha_to_bake:
+			self.image_node.connect_alpha_to(self.alpha_socket)
 
 		if self.proxy_value_node:
 			self.material.node_tree.nodes.remove(self.proxy_value_node)
-
-		self._restore_output_node()
 
 
 	def rollback(self):
@@ -276,32 +309,22 @@ class BakeMaterial():
 		'''
 		if not self.is_dummy():
 			self.material.node_tree.links.new(self.output_to_bake, self.input_socket)
-			self.material.node_tree.nodes.remove(self.image_node)
-		if self.uv_node:
-			self.material.node_tree.nodes.remove(self.uv_node)
+		self.image_node.remove(rollback=True)
 		if self.proxy_value_node:
 			self.material.node_tree.nodes.remove(self.proxy_value_node)
-		self._restore_output_node()
+			self.proxy_value_node = None
 
 
-	def create_uv_node(self):
-		if self.is_dummy():
-			return
-		uv_node = self.material.node_tree.nodes.new('ShaderNodeUVMap')
-		uv_node.uv_map = self.uv_map_name
-		uv_node.location = self.image_node.location
-		uv_node.location.x -= 200
-		self.material.node_tree.links.new(uv_node.outputs['UV'], self.image_node.inputs['Vector'])
-
-
-def get_interface_node(obj):
-	"""Finds and returns the main interface node group for a given object if it's valid."""
-	if not (obj and obj.active_material):
+	def find_alpha_input(self):
+		alpha_input_name = f"{self.input_socket.name}_Alpha"
+		alpha_socket = self.input_socket.node.inputs[alpha_input_name]
+		if alpha_socket and alpha_socket.is_linked:
+			self.alpha_socket = alpha_socket
+			return alpha_socket.links[0].from_socket
 		return None
-	mat = obj.active_material
-	return get_interface_node_in_material(mat)
 
-def get_interface_node_in_material(material):
+
+def get_interface_node(material):
 	"""Finds and returns the main interface node group for a given object if it's valid."""
 	if not material.use_nodes:
 		return None
@@ -309,4 +332,4 @@ def get_interface_node_in_material(material):
 	if not (output_node and output_node.inputs['Surface'].links):
 		return None
 	interface_node = output_node.inputs['Surface'].links[0].from_node
-	return interface_node if interface_node.type == 'GROUP' else None
+	return interface_node # if interface_node.type == 'GROUP' else None

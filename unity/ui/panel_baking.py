@@ -11,7 +11,7 @@ def get_bakeable_sockets(self, context):
 	if not context.material:
 		return items
 
-	interface_node = baker.get_interface_node_in_material(context.material)
+	interface_node = baker.get_interface_node(context.material)
 	if not interface_node:
 		return items # Return empty list for unsupported materials
 
@@ -40,7 +40,7 @@ def get_uv_maps(self, context):
 	
 	return items
 
-def get_socket_type(context):
+def get_active_socket(context):
 	"""
 	Returns the type of the currently selected socket,
 	respecting whether the active material is using a global or override setting.
@@ -69,12 +69,12 @@ def get_socket_type(context):
 	if socket_name == "NONE":
 		return None
 
-	interface_node = baker.get_interface_node_in_material(context.material)
+	interface_node = baker.get_interface_node(context.material)
 	if not interface_node:
 		return None
 	
 	socket = interface_node.inputs.get(socket_name)
-	return socket.type if socket else None
+	return socket
 
 
 def on_update_target_socket_data(self, context):
@@ -97,30 +97,19 @@ def on_update_uv_map_enum(self, context):
 	self.uv_map_name = self.uv_map
 	return None
 
-class MaterialBakeOverride(bpy.types.PropertyGroup):
-	"""Stores all material-specific override settings for a bake operation."""
-	name: bpy.props.StringProperty()
-	material: bpy.props.PointerProperty(type=bpy.types.Material)
-
-	use_override: bpy.props.BoolProperty(
-		name="Override Global Settings",
-		description="Use custom settings for this material instead of the global preset settings",
-		default=False
-	)
-
+class MaterialBakeBase(bpy.types.PropertyGroup):
 	target_socket: bpy.props.EnumProperty(items=get_bakeable_sockets, update=on_update_target_socket_enum, name="Target Input")
 	target_socket_name: bpy.props.StringProperty() # Hidden property to store the actual name persistently
 
+	uv_map: bpy.props.EnumProperty(name="UV Map", items=get_uv_maps, update=on_update_uv_map_enum)
+	uv_map_name: bpy.props.StringProperty()
+
+	bake_mode: bpy.props.EnumProperty(items=[('NEW', "New", ""), ('EXISTING', "Existing", "")], default='NEW', name="Mode")
+	existing_image: bpy.props.PointerProperty(name="Image", type=bpy.types.Image)
+	resolution: bpy.props.IntProperty(name="Resolution", default=1024, min=64, max=8192)
+
 	single_channel_target: bpy.props.EnumProperty(items=[('R', "R", ""), ('G', "G", ""), ('B', "B", "")])
 	multi_channel_targets: bpy.props.EnumProperty(items=[('R', "R", ""), ('G', "G", ""), ('B', "B", "")], options={'ENUM_FLAG'}, name="Channels")
-	bake_mode: bpy.props.EnumProperty(items=[('NEW', "New", ""), ('EXISTING', "Existing", "")], default='NEW', name="Mode")
-	resolution: bpy.props.IntProperty(name="Resolution", default=1024, min=64, max=8192)
-	margin: bpy.props.IntProperty(name="Margin", description="Extends the baked result as a post-process filter", default=16, min=0)
-	use_margin_override: bpy.props.BoolProperty(
-		name="Override Margin",
-		description="Use a custom margin for this material instead of the preset's global margin",
-		default=False
-	)
 	color_space: bpy.props.EnumProperty(
 		name="Color Space",
 		description="Color space for newly created images",
@@ -131,37 +120,31 @@ class MaterialBakeOverride(bpy.types.PropertyGroup):
 		],
 		default='sRGB'
 	)
-	existing_image: bpy.props.PointerProperty(name="Image", type=bpy.types.Image)
-	uv_map: bpy.props.EnumProperty(name="UV Map", items=get_uv_maps, update=on_update_uv_map_enum)
-	uv_map_name: bpy.props.StringProperty()
 
 
-class BakePreset(bpy.types.PropertyGroup):
+class MaterialBakeOverride(MaterialBakeBase): 
+	"""Stores all material-specific override settings for a bake operation."""
+	name: bpy.props.StringProperty()
+	material: bpy.props.PointerProperty(type=bpy.types.Material)
+
+	use_override: bpy.props.BoolProperty(
+		name="Override Global Settings",
+		description="Use custom settings for this material instead of the global preset settings",
+		default=False
+	)
+
+	margin: bpy.props.IntProperty(name="Margin", description="Extends the baked result as a post-process filter", default=16, min=0)
+	use_margin_override: bpy.props.BoolProperty(
+		name="Override Margin",
+		description="Use a custom margin for this material instead of the preset's global margin",
+		default=False
+	)
+
+
+class BakePreset(MaterialBakeBase):
     """A single, named bake configuration with global settings and per-material overrides."""
     name: bpy.props.StringProperty(name="Name", default="Bake Preset")
     is_active: bpy.props.BoolProperty(name="Active", default=True)
-    
-    # --- Global Settings ---
-    target_socket: bpy.props.EnumProperty(name="Target Input", items=get_bakeable_sockets, update=on_update_target_socket_enum)
-    target_socket_name: bpy.props.StringProperty() # Hidden property to store the actual name persistently
-
-    uv_map: bpy.props.EnumProperty(name="UV Map", items=get_uv_maps, update=on_update_uv_map_enum)
-    uv_map_name: bpy.props.StringProperty()
-    single_channel_target: bpy.props.EnumProperty(items=[('R', "R", ""), ('G', "G", ""), ('B', "B", "")], default='R')
-    multi_channel_targets: bpy.props.EnumProperty(name="Channels", items=[('R', "R", ""), ('G', "G", ""), ('B', "B", "")], options={'ENUM_FLAG'}, default={'R', 'G', 'B'})
-    bake_mode: bpy.props.EnumProperty(name="Mode", items=[('NEW', "New", ""), ('EXISTING', "Existing", "")], default='NEW')
-    resolution: bpy.props.IntProperty(name="Resolution", default=1024, min=64, max=8192)
-    color_space: bpy.props.EnumProperty(
-        name="Color Space",
-        description="Color space for newly created images",
-        items=[
-            ('sRGB', 'sRGB', "Standard RGB color space for color textures"),
-            ('Non-Color', 'Non-Color', "For data textures like normals or roughness"),
-            ('Linear', 'Linear', "Raw linear color space"),
-        ],
-        default='sRGB'
-    )
-    existing_image: bpy.props.PointerProperty(name="Image", type=bpy.types.Image)
 
     # --- Per-Material Overrides ---
     material_overrides: bpy.props.CollectionProperty(type=MaterialBakeOverride)
@@ -261,342 +244,427 @@ def _safe_reset_socket(preset_or_override):
 
 
 def draw_bake_settings_ui(layout, context, override_settings, preset_settings):
-    """Helper function to draw the common bake settings UI for a material.
-    It handles showing global preset values or material-specific overrides.
-    """
-    settings_source = override_settings if override_settings.use_override else preset_settings
-    
-    # --- Target Socket ---
-    row = layout.row(align=True)
-    split = row.split(factor=0.4)
-    split.label(text="Target Input")
-    split.prop(settings_source, "target_socket", text="")
-    
-    layout.separator()
+	"""Helper function to draw the common bake settings UI for a material.
+	It handles showing global preset values or material-specific overrides.
+	"""
+	settings_source = override_settings if override_settings.use_override else preset_settings
 
-    if settings_source.target_socket == "NONE":
-        return
+	# --- Target Socket ---
+	row = layout.row(align=True)
+	split = row.split(factor=0.4)
+	split.label(text="Target Input")
+	split.prop(settings_source, "target_socket", text="")
 
-    # --- Dynamic Channel Selection ---
-    socket_type = get_socket_type(context)
-    row = layout.row(align=True)
-    split = row.split(factor=0.4)
-    if socket_type in {'VALUE', 'INT', 'BOOLEAN'}:
-        split.label(text="Bake to Channel")
-        sub_row = split.row(align=True)
-        sub_row.prop(settings_source, "single_channel_target", expand=True)
-    elif socket_type in {'VECTOR', 'RGBA'}:
-        split.label(text="Bake Channels")
-        sub_row = split.row(align=True)
-        op_r = sub_row.operator(UNITY_OT_toggle_bake_channel.bl_idname, text="R", depress=('R' in settings_source.multi_channel_targets))
-        op_r.channel = 'R'
-        op_g = sub_row.operator(UNITY_OT_toggle_bake_channel.bl_idname, text="G", depress=('G' in settings_source.multi_channel_targets))
-        op_g.channel = 'G'
-        op_b = sub_row.operator(UNITY_OT_toggle_bake_channel.bl_idname, text="B", depress=('B' in settings_source.multi_channel_targets))
-        op_b.channel = 'B'
+	layout.separator()
 
-    # --- Other Bake Settings ---
-    row = layout.row(align=True)
-    split = row.split(factor=0.4)
-    split.label(text="UV Map")
-    split.prop(settings_source, "uv_map", text="")
-    
-    row = layout.row(align=True)
-    split = row.split(factor=0.4)
-    split.label(text="Bake Mode")
-    split.prop(settings_source, "bake_mode", text="")
-    
-    if settings_source.bake_mode == 'NEW':
-        row = layout.row(align=True)
-        split = row.split(factor=0.4)
-        split.label(text="Resolution")
-        split.prop(settings_source, "resolution", text="")
-        
-        row = layout.row(align=True)
-        split = row.split(factor=0.4)
-        split.label(text="Color Space")
-        split.prop(settings_source, "color_space", text="")
+	if settings_source.target_socket == "NONE":
+		return
 
-    elif settings_source.bake_mode == 'EXISTING':
-        row = layout.row(align=True)
-        split = row.split(factor=0.4)
-        split.label(text="Image")
-        split.prop(settings_source, "existing_image", text="")
+	# --- Dynamic Channel Selection ---
+	socket = get_active_socket(context)
+	row = layout.row(align=True)
+	split = row.split(factor=0.4)
+	if socket:
+		if socket.type in {'VALUE', 'INT', 'BOOLEAN'}:
+			split.label(text="Bake to Channel")
+			sub_row = split.row(align=True)
+			sub_row.prop(settings_source, "single_channel_target", expand=True)
+		else:
+			split.label(text="Bake Channels")
+			sub_row = split.row(align=True)
+			op_r = sub_row.operator(UNITY_OT_toggle_bake_channel.bl_idname, text="R", depress=('R' in settings_source.multi_channel_targets))
+			op_r.channel = 'R'
+			op_g = sub_row.operator(UNITY_OT_toggle_bake_channel.bl_idname, text="G", depress=('G' in settings_source.multi_channel_targets))
+			op_g.channel = 'G'
+			op_b = sub_row.operator(UNITY_OT_toggle_bake_channel.bl_idname, text="B", depress=('B' in settings_source.multi_channel_targets))
+			op_b.channel = 'B'
+			#op_a = sub_row.operator(UNITY_OT_toggle_bake_channel.bl_idname, text="A", depress=('A' in settings_source.multi_channel_targets))
+			#op_a.channel = 'A'
 
-    # --- Margin UI ---
-    row = layout.row(align=True)
-    split = row.split(factor=0.4)
-    split.label(text="Margin-Override")
-    
-    margin_row = split.row(align=True)
-    margin_row.prop(override_settings, "use_margin_override", text="")
-    
-    if override_settings.use_margin_override:
-        margin_row.prop(override_settings, "margin", text="")
-    else:
-        sub_row = margin_row.row()
-        sub_row.enabled = False
-        sub_row.prop(context.scene.render.bake, "margin", text="")
+	# --- Other Bake Settings ---
+	row = layout.row(align=True)
+	split = row.split(factor=0.4)
+	split.label(text="UV Map")
+	split.prop(settings_source, "uv_map", text="")
 
-    # --- Plausibility Warnings (full width below the split) ---
-    layout.separator()
-    if settings_source.bake_mode == 'NEW':
-        if socket_type in {'VALUE', 'INT', 'BOOLEAN', 'VECTOR'} and settings_source.color_space == 'sRGB':
-            warning_box = layout.box()
-            warning_box.label(text=f"Socket likely expects linear data, but Color Space is sRGB.", icon='ERROR')
+	row = layout.row(align=True)
+	split = row.split(factor=0.4)
+	split.label(text="Bake Mode")
+	split.prop(settings_source, "bake_mode", text="")
 
-    elif settings_source.bake_mode == 'EXISTING':
-        if settings_source.existing_image:
-            image_color_space = settings_source.existing_image.colorspace_settings.name
-            if socket_type in {'VALUE', 'INT', 'BOOLEAN', 'VECTOR'} and image_color_space == 'sRGB':
-                warning_box = layout.box()
-                warning_box.label(text=f"Socket expects linear data, but Image Color Space is sRGB.", icon='ERROR')
+	if settings_source.bake_mode == 'NEW':
+		row = layout.row(align=True)
+		split = row.split(factor=0.4)
+		split.label(text="Resolution")
+		split.prop(settings_source, "resolution", text="")
+		
+		row = layout.row(align=True)
+		split = row.split(factor=0.4)
+		split.label(text="Color Space")
+		split.prop(settings_source, "color_space", text="")
 
+	elif settings_source.bake_mode == 'EXISTING':
+		row = layout.row(align=True)
+		split = row.split(factor=0.4)
+		split.label(text="Image")
+		split.prop(settings_source, "existing_image", text="")
+
+	# --- Margin UI ---
+	row = layout.row(align=True)
+	split = row.split(factor=0.4)
+	split.label(text="Margin-Override")
+
+	margin_row = split.row(align=True)
+	margin_row.prop(override_settings, "use_margin_override", text="")
+
+	if override_settings.use_margin_override:
+		margin_row.prop(override_settings, "margin", text="")
+	else:
+		sub_row = margin_row.row()
+		sub_row.enabled = False
+		sub_row.prop(context.scene.render.bake, "margin", text="")
+
+	# --- Plausibility Warnings (full width below the split) ---
+	layout.separator()
+	if socket:
+		if settings_source.bake_mode == 'NEW':
+			if bake_utils.is_value_socket(socket) and settings_source.color_space == 'sRGB':
+				warning_box = layout.box()
+				warning_box.label(text=f"Socket likely expects linear data, but Color Space is sRGB.", icon='ERROR')
+
+		elif settings_source.bake_mode == 'EXISTING':
+			if settings_source.existing_image:
+				image_color_space = settings_source.existing_image.colorspace_settings.name
+				if bake_utils.is_value_socket(socket) and image_color_space == 'sRGB':
+					warning_box = layout.box()
+					warning_box.label(text=f"Socket expects linear data, but Image Color Space is sRGB.", icon='ERROR')
+
+
+class SocketBakeInfo(bpy.types.PropertyGroup):
+	"""Helper to show socket/channel info in the confirmation dialog."""
+	socket_name: bpy.props.StringProperty()
+	channels: bpy.props.StringProperty()
+
+class ImageBakeInfo(bpy.types.PropertyGroup):
+	"""Helper to show image-related info in the confirmation dialog."""
+	image_name: bpy.props.StringProperty()
+	mode: bpy.props.StringProperty()
+	socket_infos: bpy.props.CollectionProperty(type=SocketBakeInfo)
 
 class BakePassInfo(bpy.types.PropertyGroup):
-    """Helper property group to display bake pass info in the confirmation dialog."""
-    object_name: bpy.props.StringProperty()
-    materials_list: bpy.props.StringProperty()
-    images_list: bpy.props.StringProperty()
-    margin_info: bpy.props.StringProperty()
-    pass_index: bpy.props.IntProperty()
+	"""Helper property group to display bake pass info in the confirmation dialog."""
+	object_name: bpy.props.StringProperty()
+	materials_list: bpy.props.StringProperty()
+	margin_info: bpy.props.StringProperty()
+	pass_index: bpy.props.IntProperty()
+	image_infos: bpy.props.CollectionProperty(type=ImageBakeInfo)
 
 class BakeConfirmationSettings(bpy.types.PropertyGroup):
-    """Stores the collected info for all bake passes to show in the dialog."""
-    passes: bpy.props.CollectionProperty(type=BakePassInfo)
-    active_index: bpy.props.IntProperty(name="Active Pass Index", default=0)
+	"""Stores the collected info for all bake passes to show in the dialog."""
+	passes: bpy.props.CollectionProperty(type=BakePassInfo)
+	active_index: bpy.props.IntProperty(name="Active Pass Index", default=0)
 
 class UNITY_UL_bake_pass_info(bpy.types.UIList):
-    """UI List to display the bake pass summary."""
-    def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
-        # 'item' is a BakePassInfo instance
-        if self.layout_type in {'DEFAULT', 'COMPACT'}:
-            # Only show the main pass info in the list itself
-            layout.label(text=f"Pass #{item.pass_index + 1}: {item.object_name}", icon='MOD_UVPROJECT')
+	"""UI List to display the bake pass summary."""
+	def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
+		# 'item' is a BakePassInfo instance
+		if self.layout_type in {'DEFAULT', 'COMPACT'}:
+			# Only show the main pass info in the list itself
+			layout.label(text=f"Pass #{item.pass_index + 1}: {item.object_name}", icon='MOD_UVPROJECT')
 
 
 class UNITY_OT_confirm_bake(bpy.types.Operator):
-    """Shows a confirmation dialog with a summary of the bake passes."""
-    bl_idname = "unity_bake.confirm_bake"
-    bl_label = "Bake Preview"
-    bl_options = {'REGISTER', 'INTERNAL'}
+	"""Shows a confirmation dialog with a summary of the bake passes."""
+	bl_idname = "unity_bake.confirm_bake"
+	bl_label = "Bake Preview"
+	bl_options = {'REGISTER', 'INTERNAL'}
 
-    @classmethod
-    def poll(cls, context):
-        # This operator should only be called by other scripts, not directly from the UI
-        return True
+	@classmethod
+	def poll(cls, context):
+		# This operator should only be called by other scripts, not directly from the UI
+		return True
 
-    def execute(self, context):
-        # The actual baking logic is now here
-        bake_data = UNITY_OT_bake_batch.bake_data_to_confirm
-        if not bake_data:
-            self.report({'ERROR'}, "No bake data found to execute.")
-            return {'CANCELLED'}
+	def execute(self, context):
+		# The actual baking logic is now here
+		bake_data = UNITY_OT_bake_batch.bake_data_to_confirm
+		if not bake_data:
+			self.report({'ERROR'}, "No bake data found to execute.")
+			return {'CANCELLED'}
+		
+		print("--- Starting Bake from Confirmation ---")
+		baker_instance = baker.Baker(bake_data)
+		result = baker_instance.bake()
+		
+		# Clean up the temporary data
+		UNITY_OT_bake_batch.bake_data_to_confirm = None
+		context.window_manager.bake_confirmation.passes.clear()
+		
+		return result
+
+	def invoke(self, context, event):
+		wm = context.window_manager
+		return wm.invoke_props_dialog(self, width=360)
+
+	def draw(self, context):
+		layout = self.layout
+		wm = context.window_manager
+		
+		layout.label(text=f"The addon will perform {len(wm.bake_confirmation.passes)} bake operations.")
+		layout.label(text="Please review the passes before starting.")
+		layout.separator()
+
+		layout.template_list("UNITY_UL_bake_pass_info", "", wm.bake_confirmation, "passes", wm.bake_confirmation, "active_index", rows=5)
+
+		# Show details for the selected pass below the list
+		passes = wm.bake_confirmation.passes
+		active_index = wm.bake_confirmation.active_index
         
-        print("--- Starting Bake from Confirmation ---")
-        baker_instance = baker.Baker(bake_data)
-        result = baker_instance.bake()
-        
-        # Clean up the temporary data
-        UNITY_OT_bake_batch.bake_data_to_confirm = None
-        context.window_manager.bake_confirmation.passes.clear()
-        
-        return result
+		if active_index >= 0 and active_index < len(passes):
+			active_pass = passes[active_index]
+			box = layout.box()
+			col = box.column(align=True)
+			col.label(text=f"Materials: {active_pass.materials_list}")
+			
+			col.label(text="Images:")
+			if active_pass.image_infos:
+				for image_info in active_pass.image_infos:
+					col.label(text=f"• {image_info.image_name} ({image_info.mode})")
 
-    def invoke(self, context, event):
-        wm = context.window_manager
-        return wm.invoke_props_dialog(self, width=450)
+					# Group by channel configuration for cleaner display
+					grouped_by_channels = {}
+					for socket_info in image_info.socket_infos:
+						channels_str = socket_info.channels
+						if channels_str not in grouped_by_channels:
+							grouped_by_channels[channels_str] = []
+						grouped_by_channels[channels_str].append(socket_info.socket_name)
+					
+					# Draw the grouped sockets and channels
+					box_inner = col.box()
+					for channels_str, socket_names in sorted(grouped_by_channels.items()):
+						split = box_inner.split(factor=0.65)
+						
+						socket_col = split.column()
+						for s_name in sorted(socket_names):
+							socket_col.label(text=f"  {s_name}")
 
-    def draw(self, context):
-        layout = self.layout
-        wm = context.window_manager
-        
-        layout.label(text=f"The addon will perform {len(wm.bake_confirmation.passes)} bake operations.")
-        layout.label(text="Please review the passes before starting.")
-        layout.separator()
+						channel_col = split.column()
+						channel_col.alignment = 'RIGHT'
+						channel_col.label(text=channels_str or "N/A")
+			else:
+				col.label(text="  (None)")
 
-        layout.template_list("UNITY_UL_bake_pass_info", "", wm.bake_confirmation, "passes", wm.bake_confirmation, "active_index", rows=5)
-
-        # Show details for the selected pass below the list
-        passes = wm.bake_confirmation.passes
-        active_index = wm.bake_confirmation.active_index
-        
-        if active_index >= 0 and active_index < len(passes):
-            active_pass = passes[active_index]
-            box = layout.box()
-            col = box.column(align=True)
-            col.label(text=f"Materials: {active_pass.materials_list}")
-            
-            # Display images with their details
-            col.label(text="Images:")
-            image_entries = active_pass.images_list.split(';') if active_pass.images_list else []
-            if image_entries:
-                for entry in image_entries:
-                    parts = entry.split('|')
-                    if len(parts) == 3:
-                        name, mode, channels = parts
-                        col.label(text=f"• {name} ({mode})")
-                        if channels:
-                            row = col.row()
-                            row.separator(factor=2.0) # Indent
-                            row.label(text=f"Channels: {channels}")
-            else:
-                 col.label(text="  (None)")
-
-            col.separator()
-            col.label(text=f"Margin: {active_pass.margin_info}")
+			col.separator()
+			col.label(text=f"Margin: {active_pass.margin_info}")
 
 
 class ImageBakeSettings(bpy.types.PropertyGroup):
-    """Custom bake settings that can be attached to an Image datablock."""
-    use_override: bpy.props.BoolProperty(
-        name="Material Override",
-        description="Use custom bake settings for this image instead of the preset's global settings",
-        default=False
-    )
-    clear_image: bpy.props.BoolProperty(
-        name="Clear Image",
-        description="Clear the image to transparent black before baking to it. Has no effect if 'Override' is disabled.",
-        default=True
-    )
-    # The margin is part of the bake operator itself, so we can't easily override it per image
-    # in a single batch. We'd need to bake one image at a time.
-    # margin: bpy.props.IntProperty(
-    #     name="Margin",
-    #     description="Extends the baked result as a post-process filter",
-    #     default=16,
-    #     min=0,
-    #     max=2048
-    # )
+	"""Custom bake settings that can be attached to an Image datablock."""
+	use_override: bpy.props.BoolProperty(
+		name="Material Override",
+		description="Use custom bake settings for this image instead of the preset's global settings",
+		default=False
+	)
+	clear_image: bpy.props.BoolProperty(
+		name="Clear Image",
+		description="Clear the image to transparent black before baking to it. Has no effect if 'Override' is disabled.",
+		default=True
+	)
 
 class UNITY_PT_image_bake_settings_panel(bpy.types.Panel):
-    """Adds a panel to the Image Properties window for our custom bake settings."""
-    bl_label = "Unity Bake Settings"
-    bl_idname = "UNITY_PT_image_bake_settings"
-    bl_space_type = 'PROPERTIES'
-    bl_region_type = 'WINDOW'
-    bl_context = "image"
+	"""Adds a panel to the Image Properties window for our custom bake settings."""
+	bl_label = "Unity Bake Settings"
+	bl_idname = "UNITY_PT_image_bake_settings"
+	bl_space_type = 'PROPERTIES'
+	bl_region_type = 'WINDOW'
+	bl_context = "image"
 
-    @classmethod
-    def poll(cls, context):
-        return context.image is not None
+	@classmethod
+	def poll(cls, context):
+		return context.image is not None
 
-    def draw(self, context):
-        layout = self.layout
-        image_settings = context.image.unity_bake_settings
+	def draw(self, context):
+		layout = self.layout
+		image_settings = context.image.unity_bake_settings
 
-        layout.prop(image_settings, "use_override")
-        
-        box = layout.box()
-        col = box.column()
-        col.enabled = image_settings.use_override
-        col.prop(image_settings, "clear_image")
-        # col.prop(image_settings, "margin")
+		layout.prop(image_settings, "use_override")
+		
+		box = layout.box()
+		col = box.column()
+		col.enabled = image_settings.use_override
+		col.prop(image_settings, "clear_image")
 
 
 class UNITY_PT_baking_panel(bpy.types.Panel):
-    bl_label = "Baking Presets"
-    bl_idname = "UNITY_PT_baking_panel"
-    bl_space_type = 'PROPERTIES'
-    bl_region_type = 'WINDOW'
-    bl_context = "material"
+	bl_label = "Baking Presets"
+	bl_idname = "UNITY_PT_baking_panel"
+	bl_space_type = 'PROPERTIES'
+	bl_region_type = 'WINDOW'
+	bl_context = "material"
 
-    @classmethod
-    def poll(cls, context):
-        return context.object is not None
+	@classmethod
+	def poll(cls, context):
+		return context.object is not None
 
-    def draw(self, context):
-        layout = self.layout
-        settings = context.object.unity_bake_settings
+	def draw(self, context):
+		layout = self.layout
+		settings = context.object.unity_bake_settings
 
-        row = layout.row()
-        row.template_list("UNITY_UL_bake_presets", "", settings, "presets", settings, "active_index")
-        col = row.column(align=True)
-        col.operator(UNITY_OT_add_bake_preset.bl_idname, icon='ADD', text="")
-        col.operator(UNITY_OT_remove_bake_preset.bl_idname, icon='REMOVE', text="")
+		row = layout.row()
+		row.template_list("UNITY_UL_bake_presets", "", settings, "presets", settings, "active_index")
+		col = row.column(align=True)
+		col.operator(UNITY_OT_add_bake_preset.bl_idname, icon='ADD', text="")
+		col.operator(UNITY_OT_remove_bake_preset.bl_idname, icon='REMOVE', text="")
+		col.separator()
+		col.operator("unity_bake.move_preset_up", icon='TRIA_UP', text="")
+		col.operator("unity_bake.move_preset_down", icon='TRIA_DOWN', text="")
 
-        if settings.active_index >= 0 and len(settings.presets) > 0:
-            active_preset = settings.presets[settings.active_index]
-            box = layout.box()
+		if settings.active_index >= 0 and len(settings.presets) > 0:
+			active_preset = settings.presets[settings.active_index]
+			box = layout.box()
 
-            active_material = context.material
-            if not active_material:
-                box.label(text="Select a material to configure settings.", icon='INFO')
-                return
+			active_material = context.material
+			if not active_material:
+				box.label(text="Select a material to configure settings.", icon='INFO')
+				return
 
-            interface_node = baker.get_interface_node_in_material(active_material)
-            if not interface_node:
-                box.label(text="Unsupported material node setup", icon='ERROR')
-                return
+			interface_node = baker.get_interface_node(active_material)
+			if not interface_node:
+				box.label(text="Unsupported material node setup", icon='ERROR')
+				return
 
-            active_override = None
-            for o in active_preset.material_overrides:
-                if o.material == active_material:
-                    active_override = o
-                    break
-            
-            if not active_override:
-                box.label(text=f"No bake settings for '{active_material.name}'.", icon='ERROR')
-                return
+			# Check for unsupported shader types and outputs
+			unsupported_node_types = {'ShaderNodeMixShader', 'ShaderNodeAddShader', 'ShaderNodeHoldout'}
+			is_unsupported_type = interface_node.bl_idname in unsupported_node_types
 
-            # --- Main Settings UI ---
-            col = box.column()
-            col.prop(active_override, "use_override")
-            
-            sub_box = box.box()
+			# The get_interface_node check should ensure output_node exists, but we check again for safety
+			output_node = next((n for n in active_material.node_tree.nodes if n.type == 'OUTPUT_MATERIAL'), None)
+			if output_node and output_node.inputs['Surface'].links:
+				from_socket = output_node.inputs['Surface'].links[0].from_socket
+				is_shader_output = from_socket.type == 'SHADER'
+				
+				if is_unsupported_type or not is_shader_output:
+					warning_box = box.box()
+					if is_unsupported_type:
+						shader_name = interface_node.bl_idname.replace('ShaderNode', '')
+						warning_box.label(text=f"Unsupported Shader: '{shader_name}'", icon='ERROR')
+					elif not is_shader_output:
+						warning_box.label(text="Material output is not a BSDF shader.", icon='ERROR')
+					return
+			else:
+				# This case should technically be caught by the get_interface_node check above,
+				# but we'll handle it here as a fallback.
+				box.label(text="Unsupported material node setup", icon='ERROR')
+				return
 
-            # Determine the correct source for validation
-            validation_source = active_override if active_override.use_override else active_preset
-            valid_socket_items = get_bakeable_sockets(validation_source, context)
-            valid_socket_identifiers = {item[0] for item in valid_socket_items}
+			active_override = None
+			for o in active_preset.material_overrides:
+				if o.material == active_material:
+					active_override = o
+					break
+			
+			if not active_override:
+				box.label(text=f"No bake settings for '{active_material.name}'.", icon='ERROR')
+				return
 
-            # If the selected socket is invalid for the current source, show an error.
-            if validation_source.target_socket_name not in valid_socket_identifiers and validation_source.target_socket_name not in ('', 'NONE'):
-                sub_box.label(text=f"Input '{validation_source.target_socket_name}' not found on this material.", icon='ERROR')
-                if not active_override.use_override:
-                    sub_box.label(text="Enable override to select a different input.")
-            else:
-                # Ensure the enum property is reset if its value is no longer valid
-                if validation_source.target_socket not in valid_socket_identifiers:
-                     bpy.app.timers.register(lambda p=validation_source: _safe_reset_socket(p))
-                
-                # Draw the consolidated UI
-                draw_bake_settings_ui(sub_box, context, active_override, active_preset)
+			# --- Main Settings UI ---
+			col = box.column()
+			col.prop(active_override, "use_override")
+			
+			sub_box = box.box()
+
+			# Determine the correct source for validation
+			validation_source = active_override if active_override.use_override else active_preset
+			valid_socket_items = get_bakeable_sockets(validation_source, context)
+			valid_socket_identifiers = {item[0] for item in valid_socket_items}
+
+			# If the selected socket is invalid for the current source, show an error.
+			if validation_source.target_socket_name not in valid_socket_identifiers and validation_source.target_socket_name not in ('', 'NONE'):
+				sub_box.label(text=f"Input '{validation_source.target_socket_name}' not found on this material.", icon='ERROR')
+				if not active_override.use_override:
+					sub_box.label(text="Enable override to select a different input.")
+			else:
+				# Ensure the enum property is reset if its value is no longer valid
+				if validation_source.target_socket not in valid_socket_identifiers:
+						bpy.app.timers.register(lambda p=validation_source: _safe_reset_socket(p))
+				
+				# Draw the consolidated UI
+				draw_bake_settings_ui(sub_box, context, active_override, active_preset)
+
+
+class UNITY_OT_move_bake_preset_up(bpy.types.Operator):
+	"""Move the selected bake preset up in the list"""
+	bl_idname = "unity_bake.move_preset_up"
+	bl_label = "Move Bake Preset Up"
+	bl_options = {'REGISTER', 'UNDO'}
+
+	@classmethod
+	def poll(cls, context):
+		if not context.object: return False
+		settings = context.object.unity_bake_settings
+		if not settings: return False
+		return settings.active_index > 0
+
+	def execute(self, context):
+		settings = context.object.unity_bake_settings
+		index = settings.active_index
+		settings.presets.move(index, index - 1)
+		settings.active_index -= 1
+		return {'FINISHED'}
+
+class UNITY_OT_move_bake_preset_down(bpy.types.Operator):
+	"""Move the selected bake preset down in the list"""
+	bl_idname = "unity_bake.move_preset_down"
+	bl_label = "Move Bake Preset Down"
+	bl_options = {'REGISTER', 'UNDO'}
+
+	@classmethod
+	def poll(cls, context):
+		if not context.object: return False
+		settings = context.object.unity_bake_settings
+		if not settings: return False
+		return 0 <= settings.active_index < len(settings.presets) - 1
+
+	def execute(self, context):
+		settings = context.object.unity_bake_settings
+		index = settings.active_index
+		settings.presets.move(index, index + 1)
+		settings.active_index += 1
+		return {'FINISHED'}
 
 
 class UNITY_OT_add_bake_preset(bpy.types.Operator):
-    """Add a new bake preset to the list"""
-    bl_idname = "unity_bake.add_preset"
-    bl_label = "Add Bake Preset"
-    bl_options = {'REGISTER', 'UNDO'}
+	"""Add a new bake preset to the list"""
+	bl_idname = "unity_bake.add_preset"
+	bl_label = "Add Bake Preset"
+	bl_options = {'REGISTER', 'UNDO'}
 
-    @classmethod
-    def poll(cls, context):
-        return context.object is not None
+	@classmethod
+	def poll(cls, context):
+		return context.object is not None
 
-    def execute(self, context):
-        settings = context.object.unity_bake_settings
-        new_preset = settings.presets.add()
-        new_preset.name = f"Preset {len(settings.presets)}"
+	def execute(self, context):
+		settings = context.object.unity_bake_settings
+		new_preset = settings.presets.add()
+		new_preset.name = f"Preset {len(settings.presets)}"
 
-        # Populate material overrides
-        new_preset.material_overrides.clear()
-        if context.object:
-            if context.object.type == 'MESH' and len(context.object.data.uv_layers) > 0:
-                uv_name = context.object.data.uv_layers[0].name
-                new_preset.uv_map = uv_name
-                new_preset.uv_map_name = uv_name
+		# Populate material overrides
+		new_preset.material_overrides.clear()
+		if context.object:
+			if context.object.type == 'MESH' and len(context.object.data.uv_layers) > 0:
+				uv_name = context.object.data.uv_layers[0].name
+				new_preset.uv_map = uv_name
+				new_preset.uv_map_name = uv_name
 
-            for mat_slot in context.object.material_slots:
-                if mat_slot.material:
-                    override = new_preset.material_overrides.add()
-                    override.name = mat_slot.material.name
-                    override.material = mat_slot.material
-                    override.uv_map = new_preset.uv_map
-                    override.uv_map_name = new_preset.uv_map_name
+			for mat_slot in context.object.material_slots:
+				if mat_slot.material:
+					override = new_preset.material_overrides.add()
+					override.name = mat_slot.material.name
+					override.material = mat_slot.material
+					override.uv_map = new_preset.uv_map
+					override.uv_map_name = new_preset.uv_map_name
 
-        settings.active_index = len(settings.presets) - 1
-        return {'FINISHED'}
+		settings.active_index = len(settings.presets) - 1
+		return {'FINISHED'}
 
 
 class UNITY_OT_bake_batch(bpy.types.Operator):
@@ -610,16 +678,14 @@ class UNITY_OT_bake_batch(bpy.types.Operator):
 
 	def convert_setting(self, mat, setting, socket, channels, margin_val):
 		image = setting.existing_image if setting.bake_mode == 'EXISTING' else None
+		image_meta = bake_utils.ImageMeta(setting.bake_mode, setting.resolution, margin_val, setting.color_space)
 		return bake_utils.BakeMaterialSetting(
 			mat, 
 			socket, 
-			setting.uv_map_name, 
-			image, 
+			setting.uv_map_name,
 			channels,
-			setting.bake_mode,
-			setting.resolution,
-			margin_val,
-			setting.color_space)
+			image,
+			image_meta)
 
 	def bake_batch(self, bake_data, obj, context):
 		if len(obj.unity_bake_settings.presets) == 0:
@@ -627,6 +693,7 @@ class UNITY_OT_bake_batch(bpy.types.Operator):
 
 		all_materials = [ms.material for ms in obj.material_slots if ms.material]
 
+		pass_bake_targets = {}
 		pass_index = len(bake_data.passes)
 		for preset in obj.unity_bake_settings.presets:
 			if not preset.is_active:
@@ -634,10 +701,8 @@ class UNITY_OT_bake_batch(bpy.types.Operator):
 			
 			pass_settings = []
 			is_pass_effective = False 
-			pass_bake_targets = {}
-
 			for material in all_materials:
-				interface = baker.get_interface_node_in_material(material)
+				interface = baker.get_interface_node(material)
 				
 				# --- Determine sources ---
 				# 1. Source for main settings (depends on the main override toggle)
@@ -673,24 +738,32 @@ class UNITY_OT_bake_batch(bpy.types.Operator):
 							return {'CANCELLED'}
 
 						uv_map_name = effective_setting.uv_map_name
-						target_key = (image, uv_map_name)
+						target_key = (image, uv_map_name, material)
 
 						if target_key not in pass_bake_targets:
 							pass_bake_targets[target_key] = {}
-
-						for ch in channels:
-							if ch in pass_bake_targets[target_key] and pass_bake_targets[target_key][ch] != socket.name:
-								conflicting_socket_name = pass_bake_targets[target_key][ch]
-								self.report({'ERROR'}, (
-									f"Bake conflict in preset '{preset.name}':\n"
-									f"- Image: '{image.name}'\n"
-									f"- UV Map: '{uv_map_name}'\n"
-									f"- Channel: '{ch}'\n"
-									f"Is targeted by both '{socket.name}' and '{conflicting_socket_name}'."
-								))
-								return {'CANCELLED'}
-							else:
+							for ch in channels:
 								pass_bake_targets[target_key][ch] = socket.name
+						else:
+							for ch in channels:
+								if ch in pass_bake_targets[target_key] and pass_bake_targets[target_key][ch] != socket.name:
+									conflicting_socket_name = pass_bake_targets[target_key][ch]
+									self.report({'ERROR'}, (
+										f"Bake conflict in preset '{preset.name}':\n"
+										f"- Image: '{image.name}'\n"
+										f"- UV Map: '{uv_map_name}'\n"
+										f"- Channel: '{ch}'\n"
+										f"Is targeted by both '{socket.name}' and '{conflicting_socket_name}'."
+									))
+									return {'CANCELLED'}
+								else:
+									pass_bake_targets[target_key][ch] = socket.name
+
+							candidate_pass = self.find_existing_pass(bake_data.passes, image, uv_map_name, material)
+							if candidate_pass != None:
+								bake_material_setting = self.convert_setting(material, effective_setting, socket, channels, final_margin)
+								candidate_pass.settings.append(bake_material_setting)
+								continue
 
 					# Determine final margin based on the independent margin override
 					final_margin = context.scene.render.bake.margin # Default to global blender bake margin
@@ -701,7 +774,7 @@ class UNITY_OT_bake_batch(bpy.types.Operator):
 					pass_settings.append(bake_material_setting)
 					is_pass_effective = True
 				else:
-					dummy_setting = bake_utils.BakeMaterialSetting(material, None, None, None, None, 'DUMMY', 0, 0, 'sRGB')
+					dummy_setting = bake_utils.BakeMaterialSetting(material, None, None, None, None, bake_utils.ImageMeta('DUMMY', 1, 0, 'sRGB'))
 					pass_settings.append(dummy_setting)
 
 			if is_pass_effective:
@@ -709,6 +782,13 @@ class UNITY_OT_bake_batch(bpy.types.Operator):
 				pass_index += 1
 		
 		return {'CONTINUE'} # Using a custom return value to signal success
+
+	def find_existing_pass(self, passes, image, uv_map_name, material):
+		for bake_pass in passes:
+			for setting in bake_pass.settings:
+				if setting.image == image and setting.uv_map_name == uv_map_name and setting.material == material:
+					return bake_pass
+		return None
 
 	@classmethod
 	def poll(cls, context):
@@ -750,45 +830,50 @@ class UNITY_OT_bake_batch(bpy.types.Operator):
 		for bake_pass in bake_data.passes:
 			max_margin = 0
 			materials_in_pass = set()
-			image_details = {} # Dict to aggregate info per image
+			image_details = {} # Dict to aggregate info per image: name -> {mode, sockets: {name->channels}}
 
 			# Determine highest margin and collect names for UI
 			for setting in bake_pass.settings:
 				if not setting.is_dummy():
 					materials_in_pass.add(setting.material.name)
-					if setting.margin > max_margin:
-						max_margin = setting.margin
+					if setting.image_meta.margin > max_margin:
+						max_margin = setting.image_meta.margin
 					
-					# Aggregate image details
+					# Aggregate image details, now including socket info
 					img_name = setting.get_target_image_name(bake_pass.object)
+					socket_name = setting.input_socket.name
 					if img_name not in image_details:
 						image_details[img_name] = {
-							"mode": setting.bake_mode,
-							"channels": set()
+							"mode": setting.image_meta.bake_mode,
+							"sockets": {}
 						}
+					
+					if socket_name not in image_details[img_name]["sockets"]:
+						image_details[img_name]["sockets"][socket_name] = set()
+
 					if setting.channels:
-						image_details[img_name]["channels"].update(setting.channels)
+						image_details[img_name]["sockets"][socket_name].update(setting.channels)
 
 			bake_pass.max_margin = max_margin
 
-			# Format the image info string from collected details
-			image_info_strings = []
-			rgb_order = ['R', 'G', 'B']
-			for name, details in sorted(image_details.items()):
-				mode_str = "New" if details["mode"] == 'NEW' else "Existing"
-				# Sort channels in RGB order
-				sorted_channels = [ch for ch in rgb_order if ch in details['channels']]
-				channels_str = ",".join(sorted_channels)
-				image_info_strings.append(f"{name}|{mode_str}|{channels_str}")
+			# --- Add summary item for the dialog using the new PropertyGroups ---
+			info_pass = wm.bake_confirmation.passes.add()
+			info_pass.pass_index = bake_pass.index
+			info_pass.object_name = bake_pass.object.name
+			info_pass.materials_list = ", ".join(sorted(list(materials_in_pass))) or "N/A"
+			info_pass.margin_info = f"{max_margin}px"
+			
+			rgb_order = ['R', 'G', 'B', 'A']
+			for img_name, details in sorted(image_details.items()):
+				info_image = info_pass.image_infos.add()
+				info_image.image_name = img_name
+				info_image.mode = "New" if details["mode"] == 'NEW' else "Existing"
 
-
-			# Add summary item for the dialog
-			info = wm.bake_confirmation.passes.add()
-			info.pass_index = bake_pass.index
-			info.object_name = bake_pass.object.name
-			info.materials_list = ", ".join(sorted(list(materials_in_pass))) or "N/A"
-			info.images_list = ";".join(image_info_strings) or ""
-			info.margin_info = f"{max_margin}px"
+				for socket_name, channels in sorted(details["sockets"].items()):
+					info_socket = info_image.socket_infos.add()
+					info_socket.socket_name = socket_name
+					sorted_channels = [ch for ch in rgb_order if ch in channels]
+					info_socket.channels = ",".join(sorted_channels)
 
 		# Store bake data for the confirmation operator and invoke the dialog
 		UNITY_OT_bake_batch.bake_data_to_confirm = bake_data
@@ -834,44 +919,48 @@ class UNITY_OT_bake_batch(bpy.types.Operator):
 
 
 class UNITY_OT_remove_bake_preset(bpy.types.Operator):
-    """Remove the selected bake preset from the list"""
-    bl_idname = "unity_bake.remove_preset"
-    bl_label = "Remove Bake Preset"
-    bl_options = {'REGISTER', 'UNDO'}
+	"""Remove the selected bake preset from the list"""
+	bl_idname = "unity_bake.remove_preset"
+	bl_label = "Remove Bake Preset"
+	bl_options = {'REGISTER', 'UNDO'}
 
-    @classmethod
-    def poll(cls, context):
-        if context.object:
-            settings = context.object.unity_bake_settings
-            return len(settings.presets) > 0
-        return False
+	@classmethod
+	def poll(cls, context):
+		if context.object:
+			settings = context.object.unity_bake_settings
+			return len(settings.presets) > 0
+		return False
 
-    def execute(self, context):
-        settings = context.object.unity_bake_settings
-        index = settings.active_index
-        settings.presets.remove(index)
-        if index >= len(settings.presets):
-            settings.active_index = max(0, len(settings.presets) - 1)
-        return {'FINISHED'}
+	def execute(self, context):
+		settings = context.object.unity_bake_settings
+		index = settings.active_index
+		settings.presets.remove(index)
+		if index >= len(settings.presets):
+			settings.active_index = max(0, len(settings.presets) - 1)
+		return {'FINISHED'}
 
 
 classes = (
-    MaterialBakeOverride,
-    BakePreset,
-    ObjectBakeSettings,
-    UNITY_OT_add_bake_preset,
-    UNITY_OT_remove_bake_preset,
-    UNITY_OT_toggle_bake_channel,
-    UNITY_UL_bake_presets,
-    UNITY_OT_show_tooltip,
-    UNITY_PT_baking_panel,
-    ImageBakeSettings,
-    UNITY_PT_image_bake_settings_panel,
-    BakePassInfo,
-    BakeConfirmationSettings,
-    UNITY_UL_bake_pass_info,
-    UNITY_OT_confirm_bake,
-    UNITY_OT_bake_batch,
+	MaterialBakeOverride,
+	BakePreset,
+	ObjectBakeSettings,
+	UNITY_OT_move_bake_preset_up,
+	UNITY_OT_move_bake_preset_down,
+	UNITY_OT_add_bake_preset,
+	UNITY_OT_remove_bake_preset,
+	UNITY_OT_toggle_bake_channel,
+	UNITY_UL_bake_presets,
+	UNITY_OT_show_tooltip,
+	UNITY_PT_baking_panel,
+	ImageBakeSettings,
+	UNITY_PT_image_bake_settings_panel,
+	SocketBakeInfo,
+	ImageBakeInfo,
+	BakePassInfo,
+	BakeConfirmationSettings,
+	UNITY_UL_bake_pass_info,
+	UNITY_OT_confirm_bake,
+	UNITY_OT_bake_batch,
 )
 
 def register():

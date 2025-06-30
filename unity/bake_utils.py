@@ -11,7 +11,7 @@ class BakeData():
 
 	def get_dummy_image(self):
 		if not self.dummy_image:
-			self.dummy_image = bpy.data.images.new(name="Dummy Image", width=1, height=1)
+			self.dummy_image = bpy.data.images.new(name="__DummyImage", width=1, height=1)
 		return self.dummy_image
 
 	def clear_images(self):
@@ -28,7 +28,7 @@ class BakeData():
 
 		for image in images_to_clear:
 			# Only clear images that have pixel data (generated images) and are not the dummy
-			if image.has_data and image.name != self.get_dummy_image().name:
+			if image.has_data and image.name != "__DummyImage":
 				
 				# Decide whether to clear based on the image's custom override or the global setting
 				do_clear = bpy.context.scene.render.bake.use_clear # Global default
@@ -45,6 +45,11 @@ class BakeData():
 					print(f"Skipping clear for image: {image.name}")
 
 	def validate(self):
+		for obj in bpy.context.selected_objects:
+			if obj.type != 'MESH':
+				print(f"Objekt {obj.name} ist kein Mesh.")
+				return False
+
 		# Alle Passes haben Objekt und Settings
 		for bake_pass in self.passes:
 			if bake_pass.object == None:
@@ -101,11 +106,6 @@ class BakeData():
 
 		return True
 
-#class BakeMaterial():
-# 	def __init__(self, material, settings):
-# 		self.material = material
-# 		self.settings = settings
-# 		self.has_interface = settings != None
 
 class BakePass():
 	"""
@@ -119,50 +119,123 @@ class BakePass():
 		self.index = index
 		self.max_margin = 0
 
-	def get_or_create_image_for_setting(self, setting):
+	def initialize_image(self, setting):
 		socket_name = setting.input_socket.name
 		if socket_name in self.cached_images:
 			return self.cached_images[socket_name]
 
 		print({'INFO'}, f"Creating new image for {socket_name}")
-		image = bpy.data.images.new(
-			name=f"{self.object.name}_Bake_{socket_name}",
-			width=setting.resolution,
-			height=setting.resolution
-		)
-		image.colorspace_settings.name = setting.color_space
-		self.cached_images[socket_name] = image
-		return image
+		setting.image = setting.image_meta.create(f"{self.object.name}_{socket_name}")
+		self.cached_images[socket_name] = setting.image
+		return setting.image
+
 
 class BakeMaterialSetting():
-	def __init__(self, material, input_socket, uv_map_name, image, channels, bake_mode, resolution, margin, color_space):
+	def __init__(self, material, input_socket, uv_map_name, channels, image, image_meta):
 		self.material = material
-		# Socket für den Bake. Kann Node sein, wenn es ein Dummy ist. 
+		# Socket für den Bake. Kann None sein, wenn es ein Dummy ist. 
 		self.input_socket = input_socket
 		self.uv_map_name = uv_map_name
 		self.image = image
+		self.image_meta = image_meta
 		self.channels = channels
-		self.bake_mode = bake_mode
-		self.resolution = resolution
-		self.margin = margin
-		self.color_space = color_space
 
 	def is_dummy(self):
 		return self.input_socket == None
 
 	def get_target_image_name(self, bake_object):
 		"""Returns the name of the target image for this setting."""
-		if self.bake_mode == 'EXISTING' and self.image:
+		if self.image:
 			return self.image.name
-		elif self.bake_mode == 'NEW' and self.input_socket:
-			# Reconstruct the name that will be generated later by the baker
-			return f"{bake_object.name}_Bake_{self.input_socket.name}"
-		return "Unknown Image"
+		else:
+			return f"{bake_object.name}_{self.input_socket.name}"
 
-def get_socket_channel_count(socket):
-	if socket.type == 'FLOAT' or socket.type == 'INT' or socket.type == 'BOOLEAN':
-		return 1
-	elif socket.type == 'VECTOR' or socket.type == 'COLOR':
-		return 3
-	else:
-		return 0
+
+class ImageMeta():
+	def __init__(self, bake_mode, resolution, margin, color_space):
+		self.bake_mode = bake_mode
+		self.resolution = resolution
+		self.margin = margin
+		self.color_space = color_space
+
+	def is_new(self):
+		return self.bake_mode == 'NEW'
+
+	def create(self, name):
+		image = bpy.data.images.new(
+			name=name,
+			width=self.resolution,
+			height=self.resolution
+		)
+		image.colorspace_settings.name = self.color_space
+		return image
+
+CHANNEL_MAP = {'R': 'Red', 'G': 'Green', 'B': 'Blue'}
+
+class ImageNodeProxy():
+	def __init__(self, material, image_node, was_created=False):
+		if not image_node:
+			raise ValueError(f"Invalid image node in {material.name}.")
+
+		print(f"ImageNodeProxy: {material.name} {image_node.image.name} was_created: {was_created}")
+
+		self.material = material
+		self.image_node = image_node
+		self.separate_node = None
+		self.location = self.image_node.location if self.image_node else 0
+		self.was_created = was_created
+		self.uv_node = None
+
+	def connect_to(self, socket, channels):
+		if is_single_channel_socket(socket):
+			if len(channels) != 1:
+				raise ValueError(f"Expected exactly one channel for single-channel bake for material '{self.material.name}', but got {channels}.")
+
+			channel_key = next(iter(channels))
+			output_name = CHANNEL_MAP.get(channel_key)
+
+			if output_name is None:
+				raise ValueError(f"Invalid channel '{channel_key}' specified for material '{self.material.name}'. Must be one of {list(CHANNEL_MAP.keys())}.")
+
+			if not self.separate_node:
+				self.separate_node = self.material.node_tree.nodes.new('ShaderNodeSeparateColor')
+				self.separate_node.location = self.image_node.location
+				self.material.node_tree.links.new(self.image_node.outputs['Color'], self.separate_node.inputs['Color'])
+
+				self.image_node.location.x -= 150
+				self.location = self.image_node.location
+			
+			self.material.node_tree.links.new(self.separate_node.outputs[output_name], socket)
+		else:
+			self.material.node_tree.links.new(self.image_node.outputs['Color'], socket)
+
+	def connect_alpha_to(self, socket):
+		self.material.node_tree.links.new(self.image_node.outputs['Alpha'], socket)
+
+	def add_uv(self, uv_map_name):
+		if not self.uv_node:
+			self.uv_node = self.material.node_tree.nodes.new('ShaderNodeUVMap')
+			self.uv_node.uv_map = uv_map_name
+			self.uv_node.location = self.image_node.location
+			self.uv_node.location.x -= 200
+		self.material.node_tree.links.new(self.uv_node.outputs['UV'], self.image_node.inputs['Vector'])
+
+	def select(self):
+		self.image_node.select = True
+		self.material.node_tree.nodes.active = self.image_node
+
+	def remove(self, rollback=False):
+		if self.image_node and (self.was_created or rollback):
+			self.material.node_tree.nodes.remove(self.image_node)
+		if self.separate_node:
+			self.material.node_tree.nodes.remove(self.separate_node)
+		if self.uv_node:
+			self.material.node_tree.nodes.remove(self.uv_node)
+		self.uv_node = None
+		self.separate_node = None
+
+def is_single_channel_socket(socket):
+	return socket and socket.type in {'VALUE', 'INT', 'BOOLEAN'}
+
+def is_value_socket(socket):
+	return socket and socket.type in {'VALUE', 'INT', 'BOOLEAN', 'VECTOR'}

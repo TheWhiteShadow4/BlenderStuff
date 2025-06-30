@@ -4,6 +4,8 @@
 
 This Blender addon streamlines the process of exporting models and their complex materials from Blender to Unity. It automates the export of FBX models and creates corresponding Unity materials based on a custom shader node interface in Blender, preserving material properties and texture assignments.
 
+![Unity Tools UI with Bake Button](UI-Unity-Tools.jpg)
+
 ## Features
 
 *   One-click export of the selected object to a specified Unity project folder.
@@ -104,8 +106,6 @@ The baking tools are located in the **Properties Panel** under the **Material Pr
     *   In the main **Unity** tab in the 3D Viewport's sidebar (N-key), click **"Bake Materials"**.
     *   A confirmation dialog will appear, summarizing all the planned bake passes, the materials involved, and the target images.
     *   Review the passes and click **"OK"** to start the final bake.
-
-![Unity Tools UI with Bake Button](UI-Unity-Tools.jpg)
 
 ### Image-Specific Settings
 

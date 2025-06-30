@@ -86,7 +86,6 @@ class UNITY_OT_quick_export(bpy.types.Operator):
 		if prop_name.endswith("_Alpha"):
 			return None
 
-		is_texture_convention = input_backeable(socket)
 		is_color_convention = prop_name.lower().endswith("color")
 		
 		prop_entry = {"name": prop_name}
@@ -108,25 +107,11 @@ class UNITY_OT_quick_export(bpy.types.Operator):
 					return None # Error was already reported by the helper
 
 			elif from_node.type == 'RGB':
-				if is_texture_convention:
-					self.report({'ERROR'}, f"Input '{prop_name}' follows texture convention but is connected to an RGB Color node.")
-					return None
-				
-				prop_entry["type"] = "Color"
-				color = from_node.outputs['Color'].default_value
-				prop_entry["value"] = self._correct_color(color, unity_props.apply_gamma_correction)
-
+				self.report({'ERROR'}, f"Input '{prop_name}' follows texture convention but is connected to an RGB Color node.")
+				return None
 			elif from_node.type == 'VALUE':
-				if is_texture_convention:
-					self.report({'ERROR'}, f"Input '{prop_name}' follows texture convention but is connected to a Value node.")
-					return None
-				if is_color_convention:
-					self.report({'ERROR'}, f"Input '{prop_name}' follows color convention but is connected to a Value node.")
-					return None
-
-				prop_entry["type"] = "Float"
-				prop_entry["floatValue"] = from_node.outputs['Value'].default_value
-
+				self.report({'ERROR'}, f"Input '{prop_name}' follows texture convention but is connected to a Value node.")
+				return None
 			else:
 				self.report({'INFO'}, f"Input '{prop_name}' is connected to an unsupported node type ('{from_node.type}'). It will be ignored.")
 				return None
@@ -166,8 +151,6 @@ class UNITY_OT_quick_export(bpy.types.Operator):
 			if not (output_node and output_node.inputs['Surface'].links):
 				continue
 			interface_node = output_node.inputs['Surface'].links[0].from_node
-			if interface_node.type != 'GROUP':
-				continue
 
 			material_data = {
 				"materialName": mat.name,
@@ -267,9 +250,6 @@ class UNITY_OT_quick_export(bpy.types.Operator):
 
 		self.report({'INFO'}, f"Exported {active_obj.name} to {filepath}")
 		return {'FINISHED'}
-
-def input_backeable(socket):
-	return True #socket.name.lower().endswith("map") or socket.name.lower().endswith("tex")
 
 class UNITY_OT_apply_rotation_fix(bpy.types.Operator):
     """Apply rotation fix for Unity export"""
