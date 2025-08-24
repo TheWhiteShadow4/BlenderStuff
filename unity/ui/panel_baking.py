@@ -477,6 +477,7 @@ class UNITY_PT_image_bake_settings_panel(bpy.types.Panel):
 	bl_space_type = 'PROPERTIES'
 	bl_region_type = 'WINDOW'
 	bl_context = "image"
+	bl_category = 'Game Tools'
 
 	@classmethod
 	def poll(cls, context):

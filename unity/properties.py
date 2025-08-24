@@ -66,7 +66,7 @@ def update_project_path(self, context):
 			# If anything goes wrong, just do nothing. User can set it manually.
 			pass
 
-class UnityAddonProperties(bpy.types.PropertyGroup):
+class UnityToolProperties(bpy.types.PropertyGroup):
     engine_project_path: bpy.props.StringProperty(
         name="Project Path",
         description="Path to the root of the Project",
@@ -96,13 +96,59 @@ class UnityAddonProperties(bpy.types.PropertyGroup):
     apply_gamma_correction: bpy.props.BoolProperty(
         name="Apply Gamma Correction",
         description="Convert colors from Linear to sRGB space on export to match Blender's viewport color.",
+        default=False
+    )
+
+class UnityClothRigProperties(bpy.types.PropertyGroup):
+    mode: bpy.props.EnumProperty(
+        name="Mode",
+        items=[
+            ('VERTICES', "Vertices", "Create bones on vertices"),
+            ('FACES', "Faces", "Create bones on face centers")
+        ],
+        default='VERTICES'
+    )
+    nth: bpy.props.IntProperty(
+        name="Every n-th Element",
+        description="Create a bone for every n-th element",
+        default=1,
+        min=1
+    )
+    copy_rotation: bpy.props.BoolProperty(
+        name="Copy Rotation",
+        description="Also add a Copy Rotation constraint to the bones",
+        default=False
+    )
+    vertex_group: bpy.props.StringProperty(
+        name="Vertex Group",
+        description="Use this vertex group to limit bone placement. Leave empty to use selection or all elements.",
+        default=""
+    )
+    target_armature: bpy.props.PointerProperty(
+        name="Target Armature",
+        description="Add bones to this existing armature. Leave empty to create a new one or use selected armature.",
+        type=bpy.types.Object,
+        poll=lambda self, obj: obj.type == 'ARMATURE'
+    )
+    clean_weights: bpy.props.BoolProperty(
+        name="Clean Weights",
+        description="Remove vertices from all existing deform vertex groups before assigning to new bones. Only applies when using existing armature.",
         default=True
     )
 
+classes = [
+    UnityToolProperties,
+    UnityClothRigProperties
+]
+
 def register():
-    bpy.utils.register_class(UnityAddonProperties)
-    bpy.types.Scene.unity_tool_properties = bpy.props.PointerProperty(type=UnityAddonProperties)
+    for cls in classes:
+        bpy.utils.register_class(cls)
+    bpy.types.Scene.unity_tool_properties = bpy.props.PointerProperty(type=UnityToolProperties)
+    bpy.types.Scene.unity_cloth_rig_properties = bpy.props.PointerProperty(type=UnityClothRigProperties)
 
 def unregister():
     del bpy.types.Scene.unity_tool_properties
-    bpy.utils.unregister_class(UnityAddonProperties) 
+    del bpy.types.Scene.unity_cloth_rig_properties
+    for cls in reversed(classes):
+        bpy.utils.unregister_class(cls) 

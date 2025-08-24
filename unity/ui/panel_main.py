@@ -8,7 +8,7 @@ class UNITY_PT_main_panel(bpy.types.Panel):
     bl_idname = "UNITY_PT_main_panel"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = 'Unity'
+    bl_category = 'Game Tools'
 
     def draw(self, context):
         layout = self.layout
@@ -30,7 +30,12 @@ class UNITY_PT_main_panel(bpy.types.Panel):
         row = box.row()
         row.operator("unity.quick_export", text="Quick Export")
 
-        # Section for Advanced Operations
+        # Merge Objects
+        box = layout.box()
+        box.label(text="Merge Objects")
+        row = box.row()
+        row.operator("unity.merge_objects", text="Merge Collection")
+
         box = layout.box()
         box.label(text="Baking")
         row = box.row()

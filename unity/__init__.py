@@ -2,8 +2,8 @@
 
 # pyright: reportMissingImports=false
 import bpy
-from . import properties, operators, baker, bake_utils
-from .ui import panel_main, panel_baking
+from . import properties, operators, baker, bake_utils, cloth_rigger
+from .ui import panel_main, panel_baking, panel_anim
 
 bl_info = {
 	"name": "Unity Tools",
@@ -24,6 +24,8 @@ if "bpy" in locals():
     importlib.reload(panel_baking)
     importlib.reload(baker)
     importlib.reload(bake_utils)
+    importlib.reload(cloth_rigger)
+    importlib.reload(panel_anim)
 
 def validate_and_refresh_ui():
     """
@@ -53,6 +55,8 @@ def register():
 	operators.register()
 	panel_main.register()
 	panel_baking.register()
+	cloth_rigger.register()
+	panel_anim.register()
 	
 	bpy.app.handlers.load_post.append(on_load_handler)
 	
@@ -67,6 +71,8 @@ def unregister():
 	panel_main.unregister()
 	operators.unregister()
 	properties.unregister()
+	cloth_rigger.unregister()
+	panel_anim.unregister()
 	
 	if on_load_handler in bpy.app.handlers.load_post:
 		bpy.app.handlers.load_post.remove(on_load_handler)
