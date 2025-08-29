@@ -18,8 +18,8 @@ class UNITY_PT_animation_panel(bpy.types.Panel):
         box = layout.box()
         row = box.row()
         row.prop(cloth_props, "mode", expand=True)
-        row = box.row()
-        row.prop(cloth_props, "nth")
+        #row = box.row()
+        #row.prop(cloth_props, "nth")
         if cloth_props.mode == 'FACES':
             row = box.row()
             row.prop(cloth_props, "copy_rotation")

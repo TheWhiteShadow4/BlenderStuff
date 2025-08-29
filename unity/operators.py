@@ -301,6 +301,61 @@ class UNITY_OT_merge_objects(bpy.types.Operator):
     bl_label = "Merge Collection Objects"
     bl_options = {'REGISTER', 'UNDO'}
     
+    def _safe_name_check(self, name, data_collection):
+        """Sichere Überprüfung ob ein Name in einer Blender-Datensammlung existiert"""
+        try:
+            return name in data_collection
+        except (UnicodeError, KeyError):
+            # Bei Unicode-Problemen durch alle Namen iterieren
+            for existing_name in data_collection.keys():
+                if existing_name == name:
+                    return True
+            return False
+    
+    def _get_mono_bone_name(self, obj):
+        """Ermittelt den Bone-Namen für ein Mono Animation Object, falls vorhanden"""
+        # 1. Prüfe ob Objekt einen Bone als Parent hat
+        if obj.parent and obj.parent.type == 'ARMATURE' and obj.parent_bone:
+            return obj.parent_bone
+        
+        # 2. Prüfe Armature Modifier mit vertex group
+        for modifier in obj.modifiers:
+            if modifier.type == 'ARMATURE' and modifier.vertex_group:
+                return modifier.vertex_group
+        
+        return None
+    
+    def _is_mono_animation_object(self, obj):
+        """Prüft ob ein Objekt ein Mono Animation Object ist"""
+        if obj.type != 'MESH':
+            return False
+        
+        return self._get_mono_bone_name(obj) is not None
+    
+    def _process_mono_animation_object(self, obj):
+        """Verarbeitet ein Mono Animation Object"""
+        bone_name = self._get_mono_bone_name(obj)
+        if not bone_name:
+            return
+        
+        # 1. Objekt-Daten vereinzeln (make single-user)
+        if obj.data.users > 1:
+            obj.data = obj.data.copy()
+        
+        # 2. Vertex-Gruppe für den Bone erstellen falls nicht vorhanden
+        if bone_name not in obj.vertex_groups:
+            vertex_group = obj.vertex_groups.new(name=bone_name)
+        else:
+            vertex_group = obj.vertex_groups[bone_name]
+        
+        # 3. Alle Vertices zu 100% dieser Vertex-Gruppe zuweisen
+        # Alle Vertices des Mesh ermitteln
+        vertex_indices = [v.index for v in obj.data.vertices]
+        
+        if vertex_indices:
+            # Vertices zur Gruppe hinzufügen (überschreibt bestehende Gewichtung für diese Gruppe)
+            vertex_group.add(vertex_indices, 1.0, 'REPLACE')
+    
     # Property für die Collection-Auswahl
     collection_name: bpy.props.StringProperty(
         name="Collection",
@@ -315,9 +370,24 @@ class UNITY_OT_merge_objects(bpy.types.Operator):
         
         # Finde alle Collections die das aktive Objekt enthalten
         collections = []
+        collection_index = 0
+        
         for collection in bpy.data.collections:
-            if active_obj.name in collection.objects:
-                collections.append((collection.name, collection.name, f"Merge objects from {collection.name}"))
+            # Sicher prüfen ob das Objekt in der Collection ist
+            try:
+                if active_obj.name in collection.objects:
+                    # ASCII-safe identifier verwenden, aber originalen Namen für Anzeige
+                    safe_id = f"COLLECTION_{collection_index}"
+                    collections.append((safe_id, collection.name, f"Merge objects from {collection.name}"))
+                    collection_index += 1
+            except (UnicodeError, KeyError):
+                # Bei Unicode-Problemen manuell durch Objekte iterieren
+                for obj in collection.objects:
+                    if obj == active_obj:
+                        safe_id = f"COLLECTION_{collection_index}"
+                        collections.append((safe_id, collection.name, f"Merge objects from {collection.name}"))
+                        collection_index += 1
+                        break
         
         if not collections:
             return [('NONE', "No collections found", "")]
@@ -349,17 +419,38 @@ class UNITY_OT_merge_objects(bpy.types.Operator):
             self.report({'ERROR'}, "Kein gültiges Objekt oder keine Collections gefunden")
             return {'CANCELLED'}
         
-        # 1. Gewählte Collection finden
-        source_collection = bpy.data.collections.get(self.selected_collection)
+        # 1. Gewählte Collection anhand der ID finden
+        source_collection = None
+        collection_index = 0
+        
+        # Collection anhand des safe_id zurückfinden
+        for collection in bpy.data.collections:
+            try:
+                if active_obj.name in collection.objects:
+                    safe_id = f"COLLECTION_{collection_index}"
+                    if safe_id == self.selected_collection:
+                        source_collection = collection
+                        break
+                    collection_index += 1
+            except (UnicodeError, KeyError):
+                for obj in collection.objects:
+                    if obj == active_obj:
+                        safe_id = f"COLLECTION_{collection_index}"
+                        if safe_id == self.selected_collection:
+                            source_collection = collection
+                            break
+                        collection_index += 1
+                        break
+        
         if not source_collection:
-            self.report({'ERROR'}, f"Collection '{self.selected_collection}' nicht gefunden")
+            self.report({'ERROR'}, f"Collection nicht gefunden")
             return {'CANCELLED'}
         
         # 2. Neue Collection erstellen mit Namen + "_Merged"
         merged_collection_name = f"{source_collection.name}_Merged"
         
         # Falls bereits eine Collection mit dem Namen existiert, wiederverwenden
-        if merged_collection_name in bpy.data.collections:
+        if self._safe_name_check(merged_collection_name, bpy.data.collections):
             merged_collection = bpy.data.collections[merged_collection_name]
             
             # Alle bestehenden Objekte aus der Collection entfernen
@@ -445,7 +536,20 @@ class UNITY_OT_merge_objects(bpy.types.Operator):
                 except Exception as e:
                     self.report({'WARNING'}, f"Konnte {obj.name} ({obj.type}) nicht konvertieren: {e}")
         
-        # 6. Alle Mesh-Objekte zu einem einzigen Objekt mergen
+        # 6. Mono Animation Objects verarbeiten (falls aktiviert)
+        unity_props = context.scene.unity_tool_properties
+        mono_objects_processed = 0
+        
+        if unity_props.isolate_mono_animation_objects:
+            for obj in objects_to_process:
+                if self._is_mono_animation_object(obj):
+                    try:
+                        self._process_mono_animation_object(obj)
+                        mono_objects_processed += 1
+                    except Exception as e:
+                        self.report({'WARNING'}, f"Konnte Mono Animation Object {obj.name} nicht verarbeiten: {e}")
+        
+        # 7. Alle Mesh-Objekte zu einem einzigen Objekt mergen
         mesh_objects = [obj for obj in merged_collection.objects if obj.type == 'MESH']
         
         if len(mesh_objects) > 1:
@@ -465,10 +569,10 @@ class UNITY_OT_merge_objects(bpy.types.Operator):
                     
                     # Namen des ursprünglichen Collections verwenden falls verfügbar
                     desired_name = source_collection.name
-                    if desired_name not in bpy.data.objects:
+                    if not self._safe_name_check(desired_name, bpy.data.objects):
                         merged_obj.name = desired_name
                         # Auch das Mesh umbenennen falls der Name verfügbar ist
-                        if merged_obj.data and desired_name not in bpy.data.meshes:
+                        if merged_obj.data and not self._safe_name_check(desired_name, bpy.data.meshes):
                             merged_obj.data.name = desired_name
                         else:
                             merged_obj.data.name = f"{desired_name}_Mesh"
@@ -477,7 +581,7 @@ class UNITY_OT_merge_objects(bpy.types.Operator):
                         if merged_obj.data:
                             merged_obj.data.name = f"{desired_name}_Merged_Mesh"
                     
-                    self.report({'INFO'}, f"Collection '{merged_collection_name}' erstellt. {len(objects_to_process)} Objekte zu einem Mesh gemerged. {modifier_applied_count} Modifier angewendet, {converted_count} Objekte zu Mesh konvertiert.")
+                    self.report({'INFO'}, f"Collection '{merged_collection_name}' erstellt. {len(objects_to_process)} Objekte zu einem Mesh gemerged. {mono_objects_processed} Mono Animation Objects verarbeitet, {modifier_applied_count} Modifier angewendet, {converted_count} Objekte zu Mesh konvertiert.")
                 except Exception as e:
                     self.report({'ERROR'}, f"Fehler beim Mergen der Objekte: {e}")
                     return {'CANCELLED'}
@@ -485,10 +589,10 @@ class UNITY_OT_merge_objects(bpy.types.Operator):
             # Nur ein Mesh-Objekt vorhanden, umbenennen
             single_obj = mesh_objects[0]
             desired_name = source_collection.name
-            if desired_name not in bpy.data.objects:
+            if not self._safe_name_check(desired_name, bpy.data.objects):
                 single_obj.name = desired_name
                 # Auch das Mesh umbenennen falls der Name verfügbar ist
-                if single_obj.data and desired_name not in bpy.data.meshes:
+                if single_obj.data and not self._safe_name_check(desired_name, bpy.data.meshes):
                     single_obj.data.name = desired_name
                 else:
                     single_obj.data.name = f"{desired_name}_Mesh"
@@ -497,7 +601,7 @@ class UNITY_OT_merge_objects(bpy.types.Operator):
                 if single_obj.data:
                     single_obj.data.name = f"{desired_name}_Merged_Mesh"
             
-            self.report({'INFO'}, f"Collection '{merged_collection_name}' erstellt mit einem Objekt. {modifier_applied_count} Modifier angewendet, {converted_count} Objekte zu Mesh konvertiert.")
+            self.report({'INFO'}, f"Collection '{merged_collection_name}' erstellt mit einem Objekt. {mono_objects_processed} Mono Animation Objects verarbeitet, {modifier_applied_count} Modifier angewendet, {converted_count} Objekte zu Mesh konvertiert.")
         else:
             # Keine Mesh-Objekte vorhanden
             self.report({'WARNING'}, f"Collection '{merged_collection_name}' erstellt, aber keine Mesh-Objekte zum Mergen gefunden.")

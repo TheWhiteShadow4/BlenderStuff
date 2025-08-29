@@ -99,6 +99,12 @@ class UnityToolProperties(bpy.types.PropertyGroup):
         default=False
     )
 
+    isolate_mono_animation_objects: bpy.props.BoolProperty(
+        name="Isolate Mono Animation Objects",
+        description="Automatically handle objects that are attached to a single bone by creating proper vertex groups",
+        default=True
+    )
+
 class UnityClothRigProperties(bpy.types.PropertyGroup):
     mode: bpy.props.EnumProperty(
         name="Mode",

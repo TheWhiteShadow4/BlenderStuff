@@ -34,6 +34,8 @@ class UNITY_PT_main_panel(bpy.types.Panel):
         box = layout.box()
         box.label(text="Merge Objects")
         row = box.row()
+        row.prop(unity_props, "isolate_mono_animation_objects")
+        row = box.row()
         row.operator("unity.merge_objects", text="Merge Collection")
 
         box = layout.box()
