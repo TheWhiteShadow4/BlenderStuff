@@ -6,6 +6,7 @@ import os
 import json
 import shutil
 from . import baker
+from .rotation_fix_settings import RotationFixSettings
 
 class UNITY_OT_quick_export(bpy.types.Operator):
 	"""Quick export selected object to Unity project"""
@@ -146,11 +147,29 @@ class UNITY_OT_quick_export(bpy.types.Operator):
 			if not mat:
 				continue
 
+			# Skip materials without proper node setup
+			if not mat.node_tree or not mat.node_tree.nodes:
+				self.report({'INFO'}, f"Material '{mat.name}' has no node tree, skipping")
+				continue
+
 			# Find interface node inside this material
 			output_node = next((n for n in mat.node_tree.nodes if n.type == 'OUTPUT_MATERIAL'), None)
 			if not (output_node and output_node.inputs['Surface'].links):
+				self.report({'INFO'}, f"Material '{mat.name}' has no valid output connection, skipping")
 				continue
+			
 			interface_node = output_node.inputs['Surface'].links[0].from_node
+
+			# Check if this is a supported shader node (with node_tree attribute)
+			if not hasattr(interface_node, 'node_tree') or not interface_node.node_tree:
+				self.report({'INFO'}, f"Material '{mat.name}' uses unsupported node type '{interface_node.type}', exporting material reference only")
+				# Export minimal material data so Unity can try to find it by name
+				materials_data.append({
+					"materialName": mat.name,
+					"shaderName": None,  # Unity importer will search for existing material
+					"properties": []
+				})
+				continue
 
 			material_data = {
 				"materialName": mat.name,
@@ -158,14 +177,16 @@ class UNITY_OT_quick_export(bpy.types.Operator):
 				"properties": []
 			}
 
-			for socket in interface_node.inputs:
-				prop_entry = self._process_socket(socket, unity_props, export_path)
-				if prop_entry:
-					material_data["properties"].append(prop_entry)
+			try:
+				for socket in interface_node.inputs:
+					prop_entry = self._process_socket(socket, unity_props, export_path)
+					if prop_entry:
+						material_data["properties"].append(prop_entry)
+			except Exception as e:
+				self.report({'WARNING'}, f"Error processing material '{mat.name}': {e}. Material reference exported.")
 
-			# Only add material if it actually has properties to export
-			if material_data["properties"]:
-				materials_data.append(material_data)
+			# Add material data (even if properties list is empty, so Unity knows the material name)
+			materials_data.append(material_data)
 
 		# Nothing to export
 		if not materials_data:
@@ -269,29 +290,22 @@ class UNITY_OT_apply_rotation_fix(bpy.types.Operator):
             self.report({'WARNING'}, "Operation nur für Objekte ohne Rotation möglich.")
             return {'CANCELLED'}
 
-        original_cursor_location = context.scene.cursor.location.copy()
+        # Use simple, specific settings manager for rotation fix
+        with RotationFixSettings(context):
+            # 1. Object mode, 3d cursor to selection.
+            bpy.ops.object.mode_set(mode='OBJECT')
+            bpy.ops.view3d.snap_cursor_to_selected()
 
-        # 1. Object mode, 3d cursor to selection.
-        bpy.ops.object.mode_set(mode='OBJECT')
-        bpy.ops.view3d.snap_cursor_to_selected()
+            # 2. Editmode alles auswählen und 90° drehung auf der X-Achse
+            bpy.ops.object.mode_set(mode='EDIT')
+            bpy.ops.mesh.select_all(action='SELECT')
+            bpy.ops.transform.rotate(value=math.radians(90), orient_axis='X', orient_type='CURSOR')
+            
+            # 3. Object mode und drehung -90° auf der X-Achse.
+            bpy.ops.object.mode_set(mode='OBJECT')
+            active_obj.rotation_euler.x += math.radians(90)
 
-        # 2. Editmode alles auswählen und 90° drehung auf der X-Achse
-        original_pivot = context.scene.tool_settings.transform_pivot_point
-        context.scene.tool_settings.transform_pivot_point = 'CURSOR'
-
-        bpy.ops.object.mode_set(mode='EDIT')
-        bpy.ops.mesh.select_all(action='SELECT')
-        bpy.ops.transform.rotate(value=math.radians(90), orient_axis='X', orient_type='CURSOR')
-
-        context.scene.tool_settings.transform_pivot_point = original_pivot
-        
-        # 3. Object mode und drehung -90° auf der X-Achse.
-        bpy.ops.object.mode_set(mode='OBJECT')
-        active_obj.rotation_euler.x += math.radians(90)
-
-        # Restore cursor
-        context.scene.cursor.location = original_cursor_location
-        
+        # Settings are automatically restored
         self.report({'INFO'}, "Rotation fix applied")
         return {'FINISHED'}
 

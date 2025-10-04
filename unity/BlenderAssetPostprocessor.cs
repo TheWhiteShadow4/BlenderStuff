@@ -112,14 +112,34 @@ public class BlenderAssetPostprocessor : AssetPostprocessor
 
                 if (isNewMaterial)
                 {
-					Debug.Log($"Blender Importer: Creating new material for {jsonPath}");
-                    Shader shader = Shader.Find(materialData.shaderName);
-                    if (shader == null) {
-                        Debug.LogError($"Blender Importer: Shader '{materialData.shaderName}' not found. Cannot create material for '{jsonPath}'.", AssetDatabase.LoadAssetAtPath<Object>(jsonPath));
-                        continue; // Skip to next json file
+                    // Check if shaderName is null (unsupported material from Blender)
+                    if (string.IsNullOrEmpty(materialData.shaderName))
+                    {
+                        // Try to find existing material in project by name
+                        string[] guids = AssetDatabase.FindAssets($"{materialData.materialName} t:Material");
+                        if (guids.Length > 0)
+                        {
+                            string existingMaterialPath = AssetDatabase.GUIDToAssetPath(guids[0]);
+                            material = AssetDatabase.LoadAssetAtPath<Material>(existingMaterialPath);
+                            Debug.Log($"Blender Importer: Found existing material '{materialData.materialName}' at '{existingMaterialPath}' for unsupported shader.", material);
+                        }
+                        else
+                        {
+                            Debug.LogWarning($"Blender Importer: Material '{materialData.materialName}' uses unsupported shader and no existing material found. Skipping.", AssetDatabase.LoadAssetAtPath<Object>(jsonPath));
+                            continue; // Skip this material
+                        }
                     }
-                    material = new Material(shader);
-                    AssetDatabase.CreateAsset(material, materialPath);
+                    else
+                    {
+                        Debug.Log($"Blender Importer: Creating new material for {jsonPath}");
+                        Shader shader = Shader.Find(materialData.shaderName);
+                        if (shader == null) {
+                            Debug.LogWarning($"Blender Importer: Shader '{materialData.shaderName}' not found. Skipping material '{materialData.materialName}'.", AssetDatabase.LoadAssetAtPath<Object>(jsonPath));
+                            continue; // Skip to next material
+                        }
+                        material = new Material(shader);
+                        AssetDatabase.CreateAsset(material, materialPath);
+                    }
                 }
                 // Apply properties
                 foreach (MaterialProperty prop in materialData.properties)
@@ -135,7 +155,7 @@ public class BlenderAssetPostprocessor : AssetPostprocessor
                         }
                         else
                         {
-                            Debug.LogError($"Blender Importer: Property '{prop.name}' (or '{underscoredName}') not found on shader '{material.shader.name}'.", material);
+                            Debug.LogWarning($"Blender Importer: Property '{prop.name}' (or '{underscoredName}') not found on shader '{material.shader.name}'. Skipping property.", material);
                             continue; // Skip this property
                         }
                     }

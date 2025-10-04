@@ -4,6 +4,7 @@
 # Bugs
 - [ ] Bake presets Button wird nicht deaktiviert, wenn keine Presets aktiv sind
 - [x] Channel Auswahl in Single Channel Sockets ist mehrzeilig und leer.
+- [x] Mesh Symmetry Deaktivierung im Rotation Fix - API für Blender 4.5+ unbekannt (Automerge bereits implementiert)
 
 
 - [x] C#-Skript im Unity-Projekt bei jeder Ausführung aktualisieren, um bei Add-on-Updates konsistent zu sein.
