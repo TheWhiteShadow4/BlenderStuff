@@ -276,121 +276,142 @@ class UNITY_OT_merge_objects(bpy.types.Operator):
         
         # 2. Neue Collection erstellen mit Namen + "_Merged"
         merged_collection_name = f"{source_collection.name}_Merged"
+        merged_collection = None
+        collection_was_created = False
         
-        # Falls bereits eine Collection mit dem Namen existiert, wiederverwenden
-        if self._safe_name_check(merged_collection_name, bpy.data.collections):
-            merged_collection = bpy.data.collections[merged_collection_name]
+        try:
+            # Falls bereits eine Collection mit dem Namen existiert, wiederverwenden
+            if self._safe_name_check(merged_collection_name, bpy.data.collections):
+                merged_collection = bpy.data.collections[merged_collection_name]
+                
+                # Alle bestehenden Objekte aus der Collection entfernen
+                objects_to_remove = list(merged_collection.objects)
+                for obj in objects_to_remove:
+                    merged_collection.objects.unlink(obj)
+                    # Objekt komplett aus der Szene löschen falls es in keiner anderen Collection ist
+                    if not any(obj.name in col.objects for col in bpy.data.collections if col != merged_collection):
+                        bpy.data.objects.remove(obj)
+            else:
+                # Neue Collection erstellen
+                merged_collection = bpy.data.collections.new(merged_collection_name)
+                context.scene.collection.children.link(merged_collection)
+                collection_was_created = True
             
-            # Alle bestehenden Objekte aus der Collection entfernen
-            objects_to_remove = list(merged_collection.objects)
-            for obj in objects_to_remove:
-                merged_collection.objects.unlink(obj)
-                # Objekt komplett aus der Szene löschen falls es in keiner anderen Collection ist
-                if not any(obj.name in col.objects for col in bpy.data.collections if col != merged_collection):
-                    bpy.data.objects.remove(obj)
-        else:
-            # Neue Collection erstellen
-            merged_collection = bpy.data.collections.new(merged_collection_name)
-            context.scene.collection.children.link(merged_collection)
-        
-        # 3. Alle Objekte aus der Source Collection kopieren
-        objects_to_process = []
-        for obj in source_collection.objects:
-            # Objekt duplizieren
-            new_obj = obj.copy()
-            if obj.data:
-                new_obj.data = obj.data.copy()
+            # BUGFIX: Collection in Layer Collection aktivieren
+            # Finde die Layer Collection für diese Collection
+            def find_layer_collection(layer_collection, name):
+                if layer_collection.collection.name == name:
+                    return layer_collection
+                for child in layer_collection.children:
+                    result = find_layer_collection(child, name)
+                    if result:
+                        return result
+                return None
             
-            # Zur neuen Collection hinzufügen
-            merged_collection.objects.link(new_obj)
-            objects_to_process.append(new_obj)
-        
-        # 4. Modifier anwenden (von oben nach unten, außer Armature)
-        modifier_applied_count = 0
-        for obj in objects_to_process:
-            if obj.type == 'MESH' and obj.modifiers:
-                # Objekt aktivieren für Modifier-Operationen
-                bpy.context.view_layer.objects.active = obj
-                bpy.ops.object.select_all(action='DESELECT')
-                obj.select_set(True)
+            layer_collection = find_layer_collection(context.view_layer.layer_collection, merged_collection_name)
+            if layer_collection:
+                # Collection aktivieren (sichtbar machen)
+                layer_collection.exclude = False
+            else:
+                raise RuntimeError(f"Layer Collection '{merged_collection_name}' konnte nicht gefunden werden")
+            
+            # 3. Alle Objekte aus der Source Collection kopieren
+            objects_to_process = []
+            for obj in source_collection.objects:
+                # Objekt duplizieren
+                new_obj = obj.copy()
+                if obj.data:
+                    new_obj.data = obj.data.copy()
                 
-                # Modifier von oben nach unten durchgehen, nur sichtbare anwenden
-                modifiers_to_apply = []
-                modifiers_to_remove = []
-                for modifier in obj.modifiers:
-                    if modifier.type != 'ARMATURE':
-                        if modifier.show_viewport:
-                            # Sichtbare Modifier werden angewendet
-                            modifiers_to_apply.append(modifier.name)
-                        else:
-                            # Unsichtbare Modifier werden verworfen
-                            modifiers_to_remove.append(modifier.name)
-                
-                # Modifier anwenden
-                for mod_name in modifiers_to_apply:
-                    try:
-                        bpy.ops.object.modifier_apply(modifier=mod_name)
-                        modifier_applied_count += 1
-                    except Exception as e:
-                        self.report({'WARNING'}, f"Konnte Modifier '{mod_name}' auf {obj.name} nicht anwenden: {e}")
-                
-                # Unsichtbare Modifier entfernen
-                for mod_name in modifiers_to_remove:
-                    try:
-                        bpy.ops.object.modifier_remove(modifier=mod_name)
-                    except Exception as e:
-                        self.report({'WARNING'}, f"Konnte Modifier '{mod_name}' auf {obj.name} nicht entfernen: {e}")
-        
-        # 5. Alle Nicht-Meshes zu Meshes konvertieren
-        converted_count = 0
-        for obj in objects_to_process:
-            if obj.type != 'MESH':
-                # Objekt selektieren für die Konvertierung
-                bpy.context.view_layer.objects.active = obj
-                bpy.ops.object.select_all(action='DESELECT')
-                obj.select_set(True)
-                
-                try:
-                    # Je nach Objekttyp konvertieren
-                    if obj.type in ['CURVE', 'SURFACE', 'META', 'FONT']:
-                        bpy.ops.object.convert(target='MESH')
-                        converted_count += 1
-                    elif obj.type == 'GPENCIL':
-                        # Grease Pencil zu Mesh konvertieren ist komplexer
-                        bpy.ops.gpencil.convert(type='CURVE')
-                        bpy.ops.object.convert(target='MESH')
-                        converted_count += 1
-                    # Andere Typen wie EMPTY, LIGHT, CAMERA etc. bleiben unverändert
-                except Exception as e:
-                    self.report({'WARNING'}, f"Konnte {obj.name} ({obj.type}) nicht konvertieren: {e}")
-        
-        # 6. Mono Animation Objects verarbeiten (falls aktiviert)
-        unity_props = context.scene.unity_tool_properties
-        mono_objects_processed = 0
-        
-        if unity_props.isolate_mono_animation_objects:
+                # Zur neuen Collection hinzufügen
+                merged_collection.objects.link(new_obj)
+                objects_to_process.append(new_obj)
+            
+            # 4. Modifier anwenden (von oben nach unten, außer Armature)
+            modifier_applied_count = 0
             for obj in objects_to_process:
-                if self._is_mono_animation_object(obj):
-                    try:
-                        self._process_mono_animation_object(obj)
-                        mono_objects_processed += 1
-                    except Exception as e:
-                        self.report({'WARNING'}, f"Konnte Mono Animation Object {obj.name} nicht verarbeiten: {e}")
-        
-        # 7. Alle Mesh-Objekte zu einem einzigen Objekt mergen
-        mesh_objects = [obj for obj in merged_collection.objects if obj.type == 'MESH']
-        
-        if len(mesh_objects) > 1:
-            # Alle Mesh-Objekte selektieren
-            bpy.ops.object.select_all(action='DESELECT')
-            for obj in mesh_objects:
-                obj.select_set(True)
+                if obj.type == 'MESH' and obj.modifiers:
+                    # Objekt aktivieren für Modifier-Operationen
+                    bpy.context.view_layer.objects.active = obj
+                    bpy.ops.object.select_all(action='DESELECT')
+                    obj.select_set(True)
+                    
+                    # Modifier von oben nach unten durchgehen, nur sichtbare anwenden
+                    modifiers_to_apply = []
+                    modifiers_to_remove = []
+                    for modifier in obj.modifiers:
+                        if modifier.type != 'ARMATURE':
+                            if modifier.show_viewport:
+                                # Sichtbare Modifier werden angewendet
+                                modifiers_to_apply.append(modifier.name)
+                            else:
+                                # Unsichtbare Modifier werden verworfen
+                                modifiers_to_remove.append(modifier.name)
+                    
+                    # Modifier anwenden
+                    for mod_name in modifiers_to_apply:
+                        try:
+                            bpy.ops.object.modifier_apply(modifier=mod_name)
+                            modifier_applied_count += 1
+                        except Exception as e:
+                            self.report({'WARNING'}, f"Konnte Modifier '{mod_name}' auf {obj.name} nicht anwenden: {e}")
+                    
+                    # Unsichtbare Modifier entfernen
+                    for mod_name in modifiers_to_remove:
+                        try:
+                            bpy.ops.object.modifier_remove(modifier=mod_name)
+                        except Exception as e:
+                            self.report({'WARNING'}, f"Konnte Modifier '{mod_name}' auf {obj.name} nicht entfernen: {e}")
             
-            # Das erste Mesh-Objekt als aktives setzen
-            if mesh_objects:
-                bpy.context.view_layer.objects.active = mesh_objects[0]
+            # 5. Alle Nicht-Meshes zu Meshes konvertieren
+            converted_count = 0
+            for obj in objects_to_process:
+                if obj.type != 'MESH':
+                    # Objekt selektieren für die Konvertierung
+                    bpy.context.view_layer.objects.active = obj
+                    bpy.ops.object.select_all(action='DESELECT')
+                    obj.select_set(True)
+                    
+                    try:
+                        # Je nach Objekttyp konvertieren
+                        if obj.type in ['CURVE', 'SURFACE', 'META', 'FONT']:
+                            bpy.ops.object.convert(target='MESH')
+                            converted_count += 1
+                        elif obj.type == 'GPENCIL':
+                            # Grease Pencil zu Mesh konvertieren ist komplexer
+                            bpy.ops.gpencil.convert(type='CURVE')
+                            bpy.ops.object.convert(target='MESH')
+                            converted_count += 1
+                        # Andere Typen wie EMPTY, LIGHT, CAMERA etc. bleiben unverändert
+                    except Exception as e:
+                        self.report({'WARNING'}, f"Konnte {obj.name} ({obj.type}) nicht konvertieren: {e}")
+            
+            # 6. Mono Animation Objects verarbeiten (falls aktiviert)
+            unity_props = context.scene.unity_tool_properties
+            mono_objects_processed = 0
+            
+            if unity_props.isolate_mono_animation_objects:
+                for obj in objects_to_process:
+                    if self._is_mono_animation_object(obj):
+                        try:
+                            self._process_mono_animation_object(obj)
+                            mono_objects_processed += 1
+                        except Exception as e:
+                            self.report({'WARNING'}, f"Konnte Mono Animation Object {obj.name} nicht verarbeiten: {e}")
+            
+            # 7. Alle Mesh-Objekte zu einem einzigen Objekt mergen
+            mesh_objects = [obj for obj in merged_collection.objects if obj.type == 'MESH']
+            
+            if len(mesh_objects) > 1:
+                # Alle Mesh-Objekte selektieren
+                bpy.ops.object.select_all(action='DESELECT')
+                for obj in mesh_objects:
+                    obj.select_set(True)
                 
-                try:
+                # Das erste Mesh-Objekt als aktives setzen
+                if mesh_objects:
+                    bpy.context.view_layer.objects.active = mesh_objects[0]
+                    
                     # Alle selektierten Objekte zu einem vereinigen
                     bpy.ops.object.join()
                     merged_obj = bpy.context.active_object
@@ -410,29 +431,50 @@ class UNITY_OT_merge_objects(bpy.types.Operator):
                             merged_obj.data.name = f"{desired_name}_Merged_Mesh"
                     
                     self.report({'INFO'}, f"Collection '{merged_collection_name}' erstellt. {len(objects_to_process)} Objekte zu einem Mesh gemerged. {mono_objects_processed} Mono Animation Objects verarbeitet, {modifier_applied_count} Modifier angewendet, {converted_count} Objekte zu Mesh konvertiert.")
-                except Exception as e:
-                    self.report({'ERROR'}, f"Fehler beim Mergen der Objekte: {e}")
-                    return {'CANCELLED'}
-        elif len(mesh_objects) == 1:
-            # Nur ein Mesh-Objekt vorhanden, umbenennen
-            single_obj = mesh_objects[0]
-            desired_name = source_collection.name
-            if not self._safe_name_check(desired_name, bpy.data.objects):
-                single_obj.name = desired_name
-                # Auch das Mesh umbenennen falls der Name verfügbar ist
-                if single_obj.data and not self._safe_name_check(desired_name, bpy.data.meshes):
-                    single_obj.data.name = desired_name
+            elif len(mesh_objects) == 1:
+                # Nur ein Mesh-Objekt vorhanden, umbenennen
+                single_obj = mesh_objects[0]
+                desired_name = source_collection.name
+                if not self._safe_name_check(desired_name, bpy.data.objects):
+                    single_obj.name = desired_name
+                    # Auch das Mesh umbenennen falls der Name verfügbar ist
+                    if single_obj.data and not self._safe_name_check(desired_name, bpy.data.meshes):
+                        single_obj.data.name = desired_name
+                    else:
+                        single_obj.data.name = f"{desired_name}_Mesh"
                 else:
-                    single_obj.data.name = f"{desired_name}_Mesh"
+                    single_obj.name = f"{desired_name}_Merged"
+                    if single_obj.data:
+                        single_obj.data.name = f"{desired_name}_Merged_Mesh"
+                
+                self.report({'INFO'}, f"Collection '{merged_collection_name}' erstellt mit einem Objekt. {mono_objects_processed} Mono Animation Objects verarbeitet, {modifier_applied_count} Modifier angewendet, {converted_count} Objekte zu Mesh konvertiert.")
             else:
-                single_obj.name = f"{desired_name}_Merged"
-                if single_obj.data:
-                    single_obj.data.name = f"{desired_name}_Merged_Mesh"
+                # Keine Mesh-Objekte vorhanden
+                self.report({'WARNING'}, f"Collection '{merged_collection_name}' erstellt, aber keine Mesh-Objekte zum Mergen gefunden.")
             
-            self.report({'INFO'}, f"Collection '{merged_collection_name}' erstellt mit einem Objekt. {mono_objects_processed} Mono Animation Objects verarbeitet, {modifier_applied_count} Modifier angewendet, {converted_count} Objekte zu Mesh konvertiert.")
-        else:
-            # Keine Mesh-Objekte vorhanden
-            self.report({'WARNING'}, f"Collection '{merged_collection_name}' erstellt, aber keine Mesh-Objekte zum Mergen gefunden.")
+        except Exception as e:
+            # BUGFIX: Bei Fehler die Ziel-Collection aufräumen
+            self.report({'ERROR'}, f"Fehler beim Mergen der Collection: {e}")
+            
+            # Alle Objekte aus der merged collection entfernen und löschen
+            if merged_collection:
+                objects_to_cleanup = list(merged_collection.objects)
+                for obj in objects_to_cleanup:
+                    try:
+                        merged_collection.objects.unlink(obj)
+                        bpy.data.objects.remove(obj, do_unlink=True)
+                    except Exception as cleanup_error:
+                        self.report({'WARNING'}, f"Konnte Objekt {obj.name} nicht aufräumen: {cleanup_error}")
+                
+                # Collection selbst löschen, falls sie neu erstellt wurde
+                if collection_was_created:
+                    try:
+                        context.scene.collection.children.unlink(merged_collection)
+                        bpy.data.collections.remove(merged_collection)
+                    except Exception as cleanup_error:
+                        self.report({'WARNING'}, f"Konnte Collection nicht entfernen: {cleanup_error}")
+            
+            return {'CANCELLED'}
         
         # Aktives Objekt zurücksetzen
         bpy.context.view_layer.objects.active = active_obj
