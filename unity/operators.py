@@ -8,6 +8,7 @@ import shutil
 from . import baker
 from . import constants
 from . import material_export
+from . import hair_particle_converter
 from .rotation_fix_settings import RotationFixSettings
 
 class UNITY_OT_quick_export(bpy.types.Operator):
@@ -278,6 +279,7 @@ class UNITY_OT_merge_objects(bpy.types.Operator):
         merged_collection_name = f"{source_collection.name}_Merged"
         merged_collection = None
         collection_was_created = False
+        hair_objects_created = []  # Initialisieren für Cleanup im Fehlerfall
         
         try:
             # Falls bereits eine Collection mit dem Namen existiert, wiederverwenden
@@ -327,7 +329,34 @@ class UNITY_OT_merge_objects(bpy.types.Operator):
                 merged_collection.objects.link(new_obj)
                 objects_to_process.append(new_obj)
             
-            # 4. Modifier anwenden (von oben nach unten, außer Armature)
+            # 4. Hair-Partikel konvertieren (nach dem Kopieren)
+            # Die konvertierten Objekte werden direkt in der merged_collection erstellt
+            hair_converter = hair_particle_converter.HairParticleConverter(self.report)
+            
+            for obj in list(objects_to_process):  # list() weil wir während der Iteration hinzufügen
+                if hair_converter.has_hair_particles(obj):
+                    try:
+                        converted_objects = hair_converter.convert_hair_particles(context, obj)
+                        # Konvertierte Objekte zur merged_collection hinzufügen
+                        for hair_obj in converted_objects:
+                            if not hair_obj:
+                                continue
+                            
+                            # Objekt aus allen anderen Collections entfernen
+                            for col in hair_obj.users_collection:
+                                col.objects.unlink(hair_obj)
+                            
+                            # Zur merged_collection hinzufügen
+                            if hair_obj.name not in merged_collection.objects:
+                                merged_collection.objects.link(hair_obj)
+                                objects_to_process.append(hair_obj)
+                        
+                        hair_objects_created.extend(converted_objects)
+                        self.report({'INFO'}, f"Hair-Partikel von '{obj.name}' konvertiert: {len(converted_objects)} Objekte erstellt")
+                    except Exception as e:
+                        self.report({'WARNING'}, f"Fehler beim Konvertieren der Hair-Partikel von '{obj.name}': {e}")
+            
+            # 5. Modifier anwenden (von oben nach unten, außer Armature)
             modifier_applied_count = 0
             for obj in objects_to_process:
                 if obj.type == 'MESH' and obj.modifiers:
@@ -363,7 +392,7 @@ class UNITY_OT_merge_objects(bpy.types.Operator):
                         except Exception as e:
                             self.report({'WARNING'}, f"Konnte Modifier '{mod_name}' auf {obj.name} nicht entfernen: {e}")
             
-            # 5. Alle Nicht-Meshes zu Meshes konvertieren
+            # 6. Alle Nicht-Meshes zu Meshes konvertieren
             converted_count = 0
             for obj in objects_to_process:
                 if obj.type != 'MESH':
@@ -372,11 +401,18 @@ class UNITY_OT_merge_objects(bpy.types.Operator):
                     bpy.ops.object.select_all(action='DESELECT')
                     obj.select_set(True)
                     
+                    # Objekttyp merken für spätere Behandlung
+                    original_type = obj.type
+                    
                     try:
                         # Je nach Objekttyp konvertieren
                         if obj.type in ['CURVE', 'SURFACE', 'META', 'FONT']:
                             bpy.ops.object.convert(target='MESH')
                             converted_count += 1
+                            
+                            # Smooth Shading für konvertierte Curves (z.B. Hair-Partikel)
+                            if original_type == 'CURVE' and bpy.context.active_object and bpy.context.active_object.type == 'MESH':
+                                bpy.ops.object.shade_smooth()
                         elif obj.type == 'GPENCIL':
                             # Grease Pencil zu Mesh konvertieren ist komplexer
                             bpy.ops.gpencil.convert(type='CURVE')
@@ -386,7 +422,7 @@ class UNITY_OT_merge_objects(bpy.types.Operator):
                     except Exception as e:
                         self.report({'WARNING'}, f"Konnte {obj.name} ({obj.type}) nicht konvertieren: {e}")
             
-            # 6. Mono Animation Objects verarbeiten (falls aktiviert)
+            # 7. Mono Animation Objects verarbeiten (falls aktiviert)
             unity_props = context.scene.unity_tool_properties
             mono_objects_processed = 0
             
@@ -399,7 +435,7 @@ class UNITY_OT_merge_objects(bpy.types.Operator):
                         except Exception as e:
                             self.report({'WARNING'}, f"Konnte Mono Animation Object {obj.name} nicht verarbeiten: {e}")
             
-            # 7. Alle Mesh-Objekte zu einem einzigen Objekt mergen
+            # 8. Alle Mesh-Objekte zu einem einzigen Objekt mergen
             mesh_objects = [obj for obj in merged_collection.objects if obj.type == 'MESH']
             
             if len(mesh_objects) > 1:
@@ -457,6 +493,7 @@ class UNITY_OT_merge_objects(bpy.types.Operator):
             self.report({'ERROR'}, f"Fehler beim Mergen der Collection: {e}")
             
             # Alle Objekte aus der merged collection entfernen und löschen
+            # (inkl. konvertierte Hair-Objekte, die bereits in der Collection sind)
             if merged_collection:
                 objects_to_cleanup = list(merged_collection.objects)
                 for obj in objects_to_cleanup:

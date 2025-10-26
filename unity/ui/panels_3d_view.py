@@ -178,7 +178,11 @@ class UNITY_PT_animation_panel(bpy.types.Panel):
         
         # Vertex Group selection
         row = box.row()
-        row.prop_search(cloth_props, "vertex_group", context.active_object, "vertex_groups", text=VERTEX_GROUP_TEXT)
+        if context.active_object:
+            row.prop_search(cloth_props, "vertex_group", context.active_object, "vertex_groups", text=VERTEX_GROUP_TEXT)
+        else:
+            row.enabled = False
+            row.label(text=VERTEX_GROUP_TEXT + ": No active object")
         
         # Target Armature selection
         row = box.row()

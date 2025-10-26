@@ -18,7 +18,7 @@ One-click export to Unity/Godot with automatic generation of engine-native mater
 Automatic bone rig generation for cloth simulations or animated surfaces. Automatically creates a deformed copy with armature modifier for clean baking.
 
 ### 🔧 **Object Cleanup & Merge Tools**
-Collection-based merging with automatic modifier application and comprehensive mesh cleanup operations (unconnected vertices, unused materials, vertex groups, etc.).
+Collection-based merging with automatic modifier application, hair particle conversion, and comprehensive mesh cleanup operations (unconnected vertices, unused materials, vertex groups, etc.).
 
 ---
 
@@ -138,6 +138,11 @@ You have a cloth simulation or physics-based surface animation and want to expor
 
 #### Automatic Processing
 
+- **Hair Particles:** Automatically converted and merged
+  - **PATH Rendering:** Converted to curves with correct profile, bevel depth, and materials
+    - Intelligent bevel resolution based on particle count
+  - **OBJECT Rendering:** Instances made real and included in merge
+  - Only visible particle systems are processed
 - **Modifiers:** Visible modifiers are applied, invisible ones discarded (except Armature)
 - **Conversion:** Curves, Surfaces, Fonts, Meta → automatically converted to mesh
 - **Mono Animation Objects:** Optional isolated vertex groups with 100% weight (see settings)
