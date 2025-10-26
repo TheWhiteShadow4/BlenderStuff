@@ -1,7 +1,6 @@
 # pyright: reportInvalidTypeForm=false
 # pyright: reportMissingImports=false
 import bpy
-import bmesh
 from mathutils import Vector
 
 class ObjectCleanupTools:

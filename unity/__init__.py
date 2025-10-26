@@ -8,7 +8,7 @@ from .ui import panels_3d_view, panel_baking, panel_uv_editor
 bl_info = {
 	"name": "Unity Tools",
 	"author": "TheWhiteShadow",
-	"version": (1, 1),
+	"version": (1, 2),
 	"blender": (4, 4, 0),
 	"description": "Unity Helper Tools",
 	"warning": "",

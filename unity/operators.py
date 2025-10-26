@@ -3,9 +3,7 @@
 import bpy
 import math
 import os
-import json
 import shutil
-from . import baker
 from . import constants
 from . import material_export
 from . import hair_particle_converter

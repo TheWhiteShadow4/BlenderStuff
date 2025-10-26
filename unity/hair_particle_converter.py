@@ -6,7 +6,6 @@ Konvertiert Hair-Partikel-Systeme in Mesh-Kurven mit korrektem Profil
 """
 
 import bpy
-import mathutils
 
 class HairParticleConverter:
     """Konvertiert Hair-Partikel zu Kurven mit Profil"""
