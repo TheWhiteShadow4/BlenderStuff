@@ -6,6 +6,7 @@ import os
 import json
 import shutil
 from . import baker
+from . import constants
 from .rotation_fix_settings import RotationFixSettings
 
 class UNITY_OT_quick_export(bpy.types.Operator):
@@ -20,9 +21,9 @@ class UNITY_OT_quick_export(bpy.types.Operator):
 			return list(color)
 		# Convert Linear to sRGB color space for Unity.
 		return [
-			pow(color[0], 1.0/2.2),
-			pow(color[1], 1.0/2.2),
-			pow(color[2], 1.0/2.2),
+			pow(color[0], 1.0/constants.GAMMA_CORRECTION_FACTOR),
+			pow(color[1], 1.0/constants.GAMMA_CORRECTION_FACTOR),
+			pow(color[2], 1.0/constants.GAMMA_CORRECTION_FACTOR),
 			color[3] # Alpha is linear
 		]
 
@@ -41,7 +42,7 @@ class UNITY_OT_quick_export(bpy.types.Operator):
 			return cached_path
 
 		# Zielverzeichnis vorbereiten
-		texture_export_dir = os.path.join(export_path, "Textures")
+		texture_export_dir = os.path.join(export_path, constants.TEXTURE_EXPORT_DIR)
 		os.makedirs(texture_export_dir, exist_ok=True)
 
 		# Prüfen, ob das Image intern ist (nicht auf der Festplatte gespeichert)
@@ -71,7 +72,7 @@ class UNITY_OT_quick_export(bpy.types.Operator):
 					# Datei liegt bereits am Zielort
 					pass
 
-			relative_texture_path = os.path.join(unity_props.export_path, "Textures", os.path.basename(dest_path))
+			relative_texture_path = os.path.join(unity_props.export_path, constants.TEXTURE_EXPORT_DIR, os.path.basename(dest_path))
 			relative_texture_path = relative_texture_path.replace('\\', '/')
 			# Cache merken
 			self._texture_cache[tex_node.image.name] = relative_texture_path
@@ -251,17 +252,17 @@ class UNITY_OT_quick_export(bpy.types.Operator):
 			bpy.ops.export_scene.fbx(
 				filepath=filepath,
 				use_selection=True,
-				global_scale=0.01,
-				axis_forward='Z',
-				axis_up='Y',
+				global_scale=constants.UNITY_FBX_SCALE,
+				axis_forward=constants.UNITY_AXIS_FORWARD,
+				axis_up=constants.UNITY_AXIS_UP,
 			)
 		elif engine == 'GODOT':
 			bpy.ops.export_scene.fbx(
 				filepath=filepath,
 				use_selection=True,
-				global_scale=1.0,
-				axis_forward='-Z',
-				axis_up='Y',
+				global_scale=constants.GODOT_FBX_SCALE,
+				axis_forward=constants.GODOT_AXIS_FORWARD,
+				axis_up=constants.GODOT_AXIS_UP,
 			)
 
 		# --- Material Export ---
@@ -286,7 +287,7 @@ class UNITY_OT_apply_rotation_fix(bpy.types.Operator):
         active_obj = context.active_object
 
         # Check if the object has any rotation
-        if any(abs(angle) > 0.0001 for angle in active_obj.rotation_euler):
+        if any(abs(angle) > constants.ROTATION_TOLERANCE for angle in active_obj.rotation_euler):
             self.report({'WARNING'}, "Operation nur für Objekte ohne Rotation möglich.")
             return {'CANCELLED'}
 

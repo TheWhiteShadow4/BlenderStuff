@@ -2,20 +2,25 @@
 # pyright: reportMissingImports=false
 import traceback
 from . import bake_utils
+from . import constants
 import bpy
+
+# Magic Numbers für Node-Layout
+_NODE_OFFSET_VERTICAL = 250    # Vertikaler Abstand zwischen Bake-Pass-Nodes
+_NODE_OFFSET_HORIZONTAL = 300  # Horizontaler Abstand vom Socket
 
 class Baker():
 	def __init__(self, bake_data: bake_utils.BakeData):
 		self.bake_data = bake_data
 		self.dummy_image = None
-		self.difuse_pipeline = False
+		self.diffuse_pipeline = False
 		self.material_metadata = {}
 		# Index des Passes, der Debugged werden soll. Der Prozess wird nach diesem Pass beendet und die Nodes werden nicht aufgeräumt.
 		self.debug_pass_idx = -1
 	
 	def get_or_create_dummy_image(self):
 		if not self.dummy_image:
-			self.dummy_image = bpy.data.images.new(name="__DummyImage", width=1, height=1)
+			self.dummy_image = bpy.data.images.new(name=constants.DUMMY_IMAGE_NAME, width=1, height=1)
 			self.dummy_image.generated_type = 'BLANK'
 		return self.dummy_image
 
@@ -58,14 +63,14 @@ class Baker():
 	def bake_pass(self, bake_pass: bake_utils.BakePass):
 		try:
 			print({'INFO'}, f"Prepare '{bake_pass.object.name}'.")
-			self._collect_materials_for_pass(bake_pass, self.difuse_pipeline)
+			self._collect_materials_for_pass(bake_pass, self.diffuse_pipeline)
 			for material_metadata in self.material_metadata.values():
 				material_metadata.prepare()
 			for bake_socket in self.bake_sockets:
 				bake_socket.prepare(self.material_metadata[bake_socket.material])
 
 			# Blender Bake Operation ausführen.
-			if self.difuse_pipeline:
+			if self.diffuse_pipeline:
 				bpy.ops.object.bake(type='DIFFUSE', pass_filter={'COLOR'}, save_mode='INTERNAL', margin=bake_pass.max_margin)
 			else:
 				bpy.ops.object.bake(type='EMIT', save_mode='INTERNAL', margin=bake_pass.max_margin)
@@ -109,7 +114,7 @@ class Baker():
 		print({'INFO'}, f"State wiederhergestellt.")
 		yield
 
-	def _collect_materials_for_pass(self, bake_pass, difuse_pipeline):
+	def _collect_materials_for_pass(self, bake_pass, diffuse_pipeline):
 		'''
 		Sammelt alle Materialien aus den ausgewählten Objekten. 
 		Jedes Material muss nur einaml verarbeitet werden.
@@ -118,7 +123,7 @@ class Baker():
 		for setting in bake_pass.settings:
 			mat = setting.material
 			if mat not in self.material_metadata:
-				self.material_metadata[mat] = MaterialMetadata(mat, difuse_pipeline)
+				self.material_metadata[mat] = MaterialMetadata(mat, diffuse_pipeline)
 
 			image: bpy.types.Image = setting.image
 			if setting.is_dummy():
@@ -126,7 +131,7 @@ class Baker():
 			elif image == None:
 				image = bake_pass.initialize_image(setting)
 
-			v_offset = (len(self.bake_data.passes) / 2 - bake_pass.index) * 250
+			v_offset = (len(self.bake_data.passes) / 2 - bake_pass.index) * _NODE_OFFSET_VERTICAL
 
 			image_node = self.material_metadata[mat].get_image_proxy(setting.input_socket, image, v_offset)
 			bake_material = BakeMaterial(mat, setting.input_socket, setting.uv_map_name, image_node, setting.channels)
@@ -136,12 +141,12 @@ class Baker():
 
 
 class MaterialMetadata():
-	def __init__(self, material, difuse_pipeline):
+	def __init__(self, material, diffuse_pipeline):
 		self.material = material
 		self.image_proxies = {}
 		self.combine_node = None
-		self.difuse_pipeline = difuse_pipeline
-		self.difuse_node = None
+		self.diffuse_pipeline = diffuse_pipeline
+		self.diffuse_node = None
 		self.alpha_node = None
 		self.shader_mix_node = None
 
@@ -168,7 +173,7 @@ class MaterialMetadata():
 				was_created = True
 				if socket:
 					image_node.location = socket.node.location
-					image_node.location.x -= 300
+					image_node.location.x -= _NODE_OFFSET_HORIZONTAL
 					image_node.location.y += v_offset
 			image_proxy = bake_utils.ImageNodeProxy(self.material, image_node, was_created)
 			self.image_proxies[image] = image_proxy
@@ -176,15 +181,15 @@ class MaterialMetadata():
 
 	def prepare(self):
 		self.proxy_output_pin = self.output_node.inputs['Surface']
-		if self.difuse_pipeline:
-			self.difuse_node = self.material.node_tree.nodes.new('ShaderNodeBsdfDiffuse')
+		if self.diffuse_pipeline:
+			self.diffuse_node = self.material.node_tree.nodes.new('ShaderNodeBsdfDiffuse')
 			self.alpha_node = self.material.node_tree.nodes.new('ShaderNodeBsdfTransparent')
 			self.shader_mix_node = self.material.node_tree.nodes.new('ShaderNodeMixShader')
 			self.shader_mix_node.inputs['Fac'].default_value = 1.0
 			self.material.node_tree.links.new(self.shader_mix_node.outputs['Shader'], self.proxy_output_pin)
-			self.material.node_tree.links.new(self.difuse_node.outputs['BSDF'], self.shader_mix_node.inputs[2])
+			self.material.node_tree.links.new(self.diffuse_node.outputs['BSDF'], self.shader_mix_node.inputs[2])
 			self.material.node_tree.links.new(self.alpha_node.outputs['BSDF'], self.shader_mix_node.inputs[1])
-			self.proxy_output_pin = self.difuse_node.inputs['Color']
+			self.proxy_output_pin = self.diffuse_node.inputs['Color']
 
 	def connect_color(self, output_to_bake, _channels):
 		self.material.node_tree.links.new(output_to_bake, self.proxy_output_pin)
@@ -210,9 +215,9 @@ class MaterialMetadata():
 		if self.combine_node:
 			self.material.node_tree.nodes.remove(self.combine_node)
 			self.combine_node = None
-		if self.difuse_node:
-			self.material.node_tree.nodes.remove(self.difuse_node)
-			self.difuse_node = None
+		if self.diffuse_node:
+			self.material.node_tree.nodes.remove(self.diffuse_node)
+			self.diffuse_node = None
 		if self.alpha_node:
 			self.material.node_tree.nodes.remove(self.alpha_node)
 			self.alpha_node = None

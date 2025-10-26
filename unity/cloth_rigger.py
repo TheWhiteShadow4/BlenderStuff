@@ -3,6 +3,9 @@
 import bpy
 import mathutils
 
+# Magic Numbers für Bone-Layout
+_BONE_TAIL_OFFSET = 0.2  # Länge des Bone-Tail relativ zur Normalen
+
 def get_faces_with_all_vertices_in_group(mesh_obj, vertex_group_name):
 	"""Returns a list of face indices where all vertices are in the specified vertex group"""
 	if vertex_group_name not in mesh_obj.vertex_groups:
@@ -156,7 +159,7 @@ class CLOTH_OT_rig_cloth(bpy.types.Operator):
 				normal = surface_to_armature.to_3x3() @ vert.normal
 
 				bone.head = pos
-				bone.tail = pos - normal * 0.2
+				bone.tail = pos - normal * _BONE_TAIL_OFFSET
 			else: # FACES
 				face: bpy.types.MeshPolygon = element
 				pos = surface_to_armature @ face.center
@@ -178,7 +181,7 @@ class CLOTH_OT_rig_cloth(bpy.types.Operator):
 				bitangent = surface_to_armature.to_3x3() @ bitangent
 
 				bone.head = pos
-				bone.tail = pos - bitangent * 0.2
+				bone.tail = pos - bitangent * _BONE_TAIL_OFFSET
 				bone.align_roll(normal)
 
 			# Get vertices that will be assigned to this bone

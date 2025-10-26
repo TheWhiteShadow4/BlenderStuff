@@ -1,6 +1,7 @@
 # pyright: reportInvalidTypeForm=false
 # pyright: reportMissingImports=false
 import bpy
+from . import constants
 
 class BakeData():
 	def __init__(self):
@@ -11,7 +12,7 @@ class BakeData():
 
 	def get_dummy_image(self):
 		if not self.dummy_image:
-			self.dummy_image = bpy.data.images.new(name="__DummyImage", width=1, height=1)
+			self.dummy_image = bpy.data.images.new(name=constants.DUMMY_IMAGE_NAME, width=1, height=1)
 		return self.dummy_image
 
 	def clear_images(self):
@@ -28,7 +29,7 @@ class BakeData():
 
 		for image in images_to_clear:
 			# Only clear images that have pixel data (generated images) and are not the dummy
-			if image.has_data and image.name != "__DummyImage":
+			if image.has_data and image.name != constants.DUMMY_IMAGE_NAME:
 				
 				# Decide whether to clear based on the image's custom override or the global setting
 				do_clear = bpy.context.scene.render.bake.use_clear # Global default
